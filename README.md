@@ -73,7 +73,7 @@ The platform is designed for small-scale farmers, commercial agri-enterprises, e
 ### 📊 Reports & Alerts
 - **PDF reports** — downloadable detailed field analysis
 - **SMS/push alerts** — real-time notifications for anomalies and disease warnings
-- **Vernacular language support** — reports in Hindi, Marathi, Telugu, Tamil, and more
+- **Vernacular language support** — reports in sinhala, tamil and more
 - **Dashboard analytics** — charts and heatmaps for farm managers
 
 ---
