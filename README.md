@@ -126,7 +126,7 @@ The platform is designed for small-scale farmers, commercial agri-enterprises, e
 | **Soil pH Sensor** | Analog pH probe + ADC | pH (0–14) |
 | **Soil Moisture** | Capacitive Moisture Sensor v2.0 | % volumetric water content |
 | **Temperature & Humidity** | DHT22 / SHT31 | °C, % RH |
-| **Rain Gauge** | From Whether reports | mm accumulation |
+| **Rain Gauge** | From Wether reports | mm accumulation |
 | **Air Quality** | MQ-135 | CO₂, NH₃ ppm |
 | **Camera (optional)** | OV2640 / Pi Camera | Leaf disease imaging |
 
