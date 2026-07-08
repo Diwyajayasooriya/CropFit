@@ -1,5 +1,4 @@
 
-=======
 # 🌱 Smart Greenhouse IoT Hub
 
 An **edge-computing-based IoT Hub** that solves connectivity, orchestration, and automation problems in smart greenhouses — enabling low-latency, offline-resilient control of irrigation, ventilation, and lighting.
@@ -108,8 +107,6 @@ smart-greenhouse-iot-hub/
 ```
 
 ---
-
-<<<<<<< HEAD
 ## Getting Started
 
 ### Prerequisites
@@ -291,7 +288,8 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
   <strong>Built to empower farmers with the intelligence of data 🌱</strong><br/>
   <sub>CropFit — where IoT meets agronomic AI</sub>
 </div>
-=======
+---
+
 ## 📌 Domain
 
 `IoT` · `Edge Computing` · `Artificial Intelligence` · `Smart Agriculture`
