@@ -1,274 +1,115 @@
-# 🌾 CropFit — Smart Agriculture Intelligence Platform
 
-> **IoT-powered precision agriculture**: real-time soil, air & weather sensing → AI-driven crop recommendations, yield forecasting, disease prediction, and productivity analytics.
+=======
+# 🌱 Smart Greenhouse IoT Hub
 
----
-
-## 📖 Table of Contents
-
-- [Overview](#overview)
-- [Key Features](#key-features)
-- [System Architecture](#system-architecture)
-- [IoT Device Layer](#iot-device-layer)
-- [AI/ML Capabilities](#aiml-capabilities)
-- [Crop Database](#crop-database)
-- [Tech Stack](#tech-stack)
-- [Project Structure](#project-structure)
-- [Getting Started](#getting-started)
-- [Environment Variables](#environment-variables)
-- [API Overview](#api-overview)
-- [Roadmap](#roadmap)
-- [Contributing](#contributing)
-- [License](#license)
+An **edge-computing-based IoT Hub** that solves connectivity, orchestration, and automation problems in smart greenhouses — enabling low-latency, offline-resilient control of irrigation, ventilation, and lighting.
 
 ---
 
-## Overview
+## 📖 Overview
 
-**CropFit** is an end-to-end smart agriculture platform that bridges IoT field sensing with AI-powered agronomic intelligence. IoT devices deployed in the field continuously capture soil composition, ambient air quality, and weather conditions. This real-time data feeds an AI engine that recommends the most suitable crops, predicts potential plant diseases, forecasts yield timelines, and prescribes the precise nutrients or interventions needed to maximize productivity.
+Greenhouses today face three recurring problems as they scale up their IoT infrastructure:
 
-The platform is designed for small-scale farmers, commercial agri-enterprises, extension officers, and agricultural researchers — making data-driven farming accessible at every scale.
+1. **Unstable connectivity** in large, metal-framed structures
+2. **Fragmented device orchestration** across multiple vendors/protocols
+3. **Static, inefficient automation** that can't react to real-time conditions
 
----
-
-## Key Features
-
-### 📡 IoT Sensing & Data Collection
-- **Soil sensors** — pH, Nitrogen (N), Phosphorus (P), Potassium (K), moisture, electrical conductivity
-- **Air sensors** — temperature, humidity, CO₂ levels, ambient light
-- **Weather integration** — rainfall accumulation, wind speed, barometric pressure (on-device + API enrichment)
-- **Continuous streaming** — MQTT-based real-time data pipeline from field devices to cloud
-- **Multi-device farm support** — manage and correlate data across multiple IoT nodes per farm
-
-### 🌱 Crop Suitability Matching
-- **20+ crop database** — rice, wheat, maize, cotton, sugarcane, pulses, vegetables, fruits, and more
-- **Viability scoring** — percentage match between live sensor readings and crop-optimal ranges
-- **Ranked recommendations** — top 5 most suitable crops with confidence scores
-- **Season-aware** — Kharif, Rabi, and Zaid season filtering
-
-### 💊 Fertilizer & Nutrient Recommendation Engine
-- **N-P-K formula generation** — precise nutrient prescriptions in kg/acre
-- **Deficit detection** — pinpoints exactly which nutrients are lacking
-- **Product suggestions** — specific fertilizer products (DAP, MOP, Urea, NPK complexes)
-- **Application scheduling** — when and how to apply fertilizers across growth stages
-- **Organic alternatives** — compost, green manure, and bio-fertilizer suggestions
-
-### 🦠 Plant Disease Prediction
-- **Condition-based risk assessment** — flags disease-prone environments based on humidity, temperature, and crop type
-- **Disease library** — known pathogens, symptoms, and prevention mapped per crop
-- **Early warning alerts** — notifications when conditions approach disease-triggering thresholds
-- **Treatment suggestions** — chemical and organic intervention recommendations
-
-### 📈 Yield Forecasting & Statistical Analysis
-- **Yield timeline** — stage-by-stage growth projection (germination → harvest)
-- **Productivity prediction** — estimated output (tons/acre) based on current soil and climate conditions
-- **Historical trend analysis** — compare current season against past cycles
-- **Profitability dashboard** — input costs vs. expected revenue, ROI per crop
-
-### 🔄 Crop Rotation Planner
-- **Season-based planning** — intelligent rotation sequences across Kharif / Rabi / Zaid
-- **Soil depletion prevention** — sequences that replenish depleted nutrients naturally
-- **Inter-cropping suggestions** — compatible crop pairs for mixed farming
-
-### 📊 Reports & Alerts
-- **PDF reports** — downloadable detailed field analysis
-- **SMS/push alerts** — real-time notifications for anomalies and disease warnings
-- **Vernacular language support** — reports in sinhala, tamil and more
-- **Dashboard analytics** — charts and heatmaps for farm managers
+The **Smart Greenhouse IoT Hub** solves all three through a single on-site device — the **Hub** — that acts as an **edge gateway**, performing local data aggregation, device orchestration, and AI inference directly inside the greenhouse, without depending on constant cloud round-trips.
 
 ---
 
-## System Architecture
+## 🧠 Edge Computing Architecture
+
+This project is architected as an **edge computing system**, not a purely cloud-dependent one.
+
+- **Edge Nodes** — every sensor/actuator in the greenhouse generates data at the point of use.
+- **Edge Gateway (the Hub)** — sits physically inside the greenhouse; performs local aggregation, control-loop execution, and (Phase 3) AI inference on-site.
+- **Cloud Layer** — reserved for long-term storage, heavier model training, remote access, and cross-greenhouse analytics.
+
+This split keeps time-critical decisions fast and functional even when internet connectivity is unstable — a common condition in rural/agricultural settings.
+
+### Why Edge Computing Matters Here
+
+| Benefit | Description |
+|---|---|
+| ⚡ Low latency | Control actions (opening a vent, triggering irrigation) happen on-site in milliseconds |
+| 🌐 Offline resilience | The greenhouse keeps functioning during internet outages since core logic runs on the Hub |
+| 💰 Reduced bandwidth/cloud cost | Only aggregated/important data syncs to the cloud, not every raw reading |
+| 📈 Scalability | Adding more edge nodes doesn't overload a central cloud service |
+
+---
+
+## 🚀 Three-Phase Problem & Solution Summary
+
+| Phase | Problem | Solution | Edge Role |
+|---|---|---|---|
+| **Phase 1 — Connectivity** | Weak, uneven wireless signal across large/metal-framed greenhouses causes devices to disconnect or respond unreliably | Hub acts as an on-site signal booster/repeater and load-balances device connections across itself | Local edge access point, keeping device links stable without depending on external network strength |
+| **Phase 2 — Orchestration** | Devices from different manufacturers require separate apps/protocols, making monitoring and scheduling fragmented and error-prone | Hub intercepts all device communication and exposes one unified interface to add, monitor, and schedule every device | Local edge server; device control/scheduling logic runs on-site rather than depending on multiple external cloud services |
+| **Phase 3 — AI Integration** | Static, manually-set schedules can't adapt to real-time environmental changes, limiting efficiency | AI/automation layer added on top of the Hub that adjusts irrigation, ventilation, and lighting based on live sensor data | Edge inference point; automation decisions are made locally and instantly, with cloud used only for model training/updates |
+
+---
+
+## 🛠️ Tech Stack
+
+### Phase 1: Connectivity
+- ESP32 / Raspberry Pi-class hub hardware with Wi-Fi mesh/repeater module
+- MQTT broker running locally on the Hub for lightweight device messaging
+- Dynamic load-balancing logic across connected edge nodes
+
+### Phase 2: Orchestration
+- Multi-protocol support: Wi-Fi, BLE, Zigbee
+- Local device registry + FastAPI/Node backend on the Hub
+- React Native / Next.js dashboard for device onboarding and scheduling
+
+### Phase 3: AI Integration
+- Edge inference: TensorFlow Lite / ONNX Runtime running directly on the Hub
+- Local rule-engine as a starting point, evolving into ML models (scikit-learn / XGBoost)
+- TimescaleDB for historical sensor data; cloud sync for model retraining and analytics
+- Optional LLM layer (Claude API) for natural-language insights and recommendations
+
+---
+
+## 🗺️ Five-Phase R&D Plan
+
+| Phase | Focus | Deliverables |
+|---|---|---|
+| **1. Problem Identification & Literature Review** | Research greenhouse challenges, edge computing, IoT in agriculture; define objectives and scope | Literature review, problem statement, requirements |
+| **2. System Design & Connectivity** | Design architecture, UML, hardware selection, MQTT, Wi-Fi/BLE/Zigbee research | Architecture diagrams, prototype connectivity |
+| **3. Hub Development & Device Orchestration** | Develop backend, dashboard, device onboarding, scheduling, local database | Working edge hub and dashboard |
+| **4. AI Integration & Automation** | Research ML models, implement edge inference, automate irrigation/ventilation/lighting | AI-enabled automation |
+| **5. Testing, Evaluation & Deployment** | Performance testing, usability evaluation, cloud sync, documentation, final deployment | Final system, evaluation, thesis/report, presentation |
+
+### 📅 Suggested Timeline
+
+| Weeks | Phase |
+|---|---|
+| 1–3 | Phase 1 — Problem Identification & Literature Review |
+| 4–6 | Phase 2 — System Design & Connectivity |
+| 7–10 | Phase 3 — Hub Development & Device Orchestration |
+| 11–13 | Phase 4 — AI Integration & Automation |
+| 14–16 | Phase 5 — Testing, Evaluation & Deployment |
+
+---
+
+## 📂 Project Structure (suggested)
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        FIELD LAYER (IoT)                        │
-│   [Soil Sensors]  [Air Sensors]  [Weather Station]  [Camera]   │
-│              ↓           ↓              ↓               ↓       │
-│         ESP32 / Raspberry Pi Node (Edge Processing)             │
-└───────────────────────────┬─────────────────────────────────────┘
-                            │ MQTT / HTTPS
-┌───────────────────────────▼─────────────────────────────────────┐
-│                      CLOUD / BACKEND                            │
-│  ┌──────────────┐  ┌──────────────┐  ┌───────────────────────┐ │
-│  │  IoT Gateway │  │  FastAPI     │  │   AI/ML Engine        │ │
-│  │  (MQTT       │→ │  REST API    │→ │   - Crop Matcher      │ │
-│  │   Broker)    │  │              │  │   - Disease Predictor │ │
-│  └──────────────┘  └──────┬───────┘  │   - Yield Forecaster  │ │
-│                           │          │   - Fertilizer Engine │ │
-│  ┌──────────────┐  ┌──────▼───────┐  └───────────────────────┘ │
-│  │  Redis Cache │  │  PostgreSQL  │                             │
-│  │              │  │  + PostGIS   │  ┌───────────────────────┐ │
-│  └──────────────┘  │  + pgVector  │  │   LLM Layer (Claude)  │ │
-│                    └──────────────┘  │   Natural language    │ │
-│                                      │   Q&A & explanations  │ │
-└──────────────────────────────────────┴───────────────────────┬──┘
-                                                               │
-┌──────────────────────────────────────────────────────────────▼──┐
-│                     CLIENT LAYER                                 │
-│   [Next.js Web App]          [React Native Mobile App]          │
-│   - Farmer Dashboard         - Field data on-the-go             │
-│   - Analytics & Reports      - SMS / Push Alerts                │
-│   - Admin Console            - Offline mode (PWA)               │
-└─────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## IoT Device Layer
-
-### Supported Hardware
-
-| Component | Options | Measures |
-|-----------|---------|----------|
-| **Microcontroller** | ESP32, Raspberry Pi 4 | — |
-| **Soil NPK Sensor** | RS-485 NPK Sensor Module | N, P, K (mg/kg) |
-| **Soil pH Sensor** | Analog pH probe + ADC | pH (0–14) |
-| **Soil Moisture** | Capacitive Moisture Sensor v2.0 | % volumetric water content |
-| **Temperature & Humidity** | DHT22 / SHT31 | °C, % RH |
-| **Rain Gauge** | From Wether reports | mm accumulation |
-| **Air Quality** | MQ-135 | CO₂, NH₃ ppm |
-| **Camera (optional)** | OV2640 / Pi Camera | Leaf disease imaging |
-
-### Data Flow
-```
-Sensor → ESP32 (edge filtering) → MQTT Broker → IoT Gateway → TimescaleDB / PostgreSQL
-```
-
-Devices publish readings every **5 minutes** (configurable). Edge firmware performs basic outlier filtering before transmission to reduce noise.
-
----
-
-## AI/ML Capabilities
-
-| Model | Task | Approach |
-|-------|------|----------|
-| **Crop Suitability Model** | Score crops against soil & climate | Rule-based + ML regression |
-| **Fertilizer Recommender** | N-P-K deficit → prescription | Lookup table + optimization |
-| **Disease Risk Predictor** | Environmental conditions → disease probability | Classification model |
-| **Yield Forecaster** | Soil + weather → harvest estimate | Time-series regression |
-| **LLM Layer** | Natural language Q&A, report narration | Claude API (LangChain) |
-
-Training data sources: public agronomic datasets (ICAR, FAO, USDA), synthetic augmentation, and user-contributed field records.
-
----
-
-## Crop Database
-
-| Crop | Season | Ideal pH | N (kg/ha) | P (kg/ha) | K (kg/ha) | Temp (°C) | Rainfall (mm) |
-|------|--------|----------|-----------|-----------|-----------|-----------|---------------|
-| Rice | - | 5.5–6.5 | 80–120 | 40–60 | 40–60 | 20–35 | 100–200 |
-| Wheat | - | 6.0–7.5 | 100–150 | 50–70 | 40–60 | 12–25 | 75–100 |
-| Maize | - | 5.5–7.0 | 120–180 | 60–80 | 40–60 | 18–27 | 50–100 |
-| Cotton | - | 6.0–7.5 | 80–120 | 40–60 | 60–80 | 21–30 | 50–100 |
-| Sugarcane | - | 6.0–7.5 | 150–200 | 60–80 | 100–150 | 20–30 | 100–150 |
-| Soybean | - | 6.0–7.0 | 20–40 | 40–60 | 80–120 | 20–30 | 60–100 |
-| Potato | - | 5.0–6.5 | 150–200 | 60–80 | 100–150 | 15–20 | 50–75 |
-| Tomato | Summer | 6.0–7.0 | 100–150 | 50–70 | 100–150 | 20–25 | 40–60 |
-| Onion | - | 6.0–7.0 | 80–120 | 40–60 | 50–80 | 13–25 | 35–50 |
-| Groundnut | - | 5.5–7.0 | 20–30 | 40–60 | 30–50 | 25–30 | 50–75 |
-| Chickpea | - | 6.0–7.5 | 20–30 | 40–60 | 20–40 | 15–25 | 60–90 |
-| Mustard | - | 6.0–7.5 | 60–100 | 30–50 | 20–40 | 10–20 | 40–60 |
-
-> Full database: 20+ crops with disease profiles, rotation compatibility, and yield benchmarks.
-
----
-
-## Tech Stack
-
-### Frontend
-| Technology | Purpose |
-|------------|---------|
-| **Next.js 14** | Web application (SSR + PWA) |
-| **React Native (Expo)** | Cross-platform mobile app |
-| **Tailwind CSS** | Styling |
-| **Recharts / D3.js** | Analytics dashboards and charts |
-
-### Backend
-| Technology | Purpose |
-|------------|---------|
-| **Python 3.11 + FastAPI** | Core REST API (async, high-performance) |
-| **Pydantic v2** | Request/response validation |
-| **Celery + Redis** | Background jobs (report generation, alert dispatch) |
-| **MQTT (Mosquitto)** | IoT device message broker |
-
-### AI / ML
-| Technology | Purpose |
-|------------|---------|
-| **scikit-learn / XGBoost** | Crop suitability, disease, and yield models |
-| **TensorFlow / PyTorch** | Deep learning for image-based disease detection (planned) |
-| **LangChain + Claude API** | LLM-powered natural language Q&A and report narration |
-| **pgVector** | Semantic crop similarity search |
-
-### Data & Infrastructure
-| Technology | Purpose |
-|------------|---------|
-| **PostgreSQL + PostGIS** | Primary database with spatial farm mapping |
-| **TimescaleDB** | Time-series IoT sensor data |
-| **Redis** | Caching and Celery broker |
-| **AWS IoT Core** | Managed MQTT at scale (production) |
-| **Vercel** | Web frontend deployment |
-| **AWS (ECS / Lambda)** | Backend and ML inference deployment |
-
-### IoT Firmware
-| Technology | Purpose |
-|------------|---------|
-| **Arduino / MicroPython** | ESP32 sensor firmware |
-| **Python** | Raspberry Pi gateway scripts |
-| **MQTT** | Device-to-cloud communication protocol |
-
----
-
-## Project Structure
-
-```
-cropfit/
-├── firmware/                   # IoT device code
-│   ├── esp32/                  # Arduino sketches for ESP32 sensors
-│   └── rpi-gateway/            # Raspberry Pi MQTT gateway scripts
-│
-├── backend/                    # Python FastAPI server
-│   ├── app/
-│   │   ├── api/                # Route handlers
-│   │   ├── models/             # Database models (SQLAlchemy)
-│   │   ├── schemas/            # Pydantic schemas
-│   │   ├── services/           # Business logic
-│   │   │   ├── crop_matcher.py
-│   │   │   ├── fertilizer_engine.py
-│   │   │   ├── disease_predictor.py
-│   │   │   └── yield_forecaster.py
-│   │   ├── ml/                 # ML model training & inference
-│   │   └── core/               # Config, DB connections, MQTT client
-│   ├── tests/
-│   └── requirements.txt
-│
-├── web/                        # Next.js web application
-│   ├── app/
-│   │   ├── dashboard/
-│   │   ├── crops/
-│   │   ├── reports/
-│   │   └── settings/
-│   ├── components/
-│   └── package.json
-│
-├── mobile/                     # React Native (Expo) app
-│   ├── screens/
-│   ├── components/
-│   └── package.json
-│
-├── ml/                         # ML model notebooks & training scripts
-│   ├── datasets/
-│   ├── notebooks/
-│   └── models/
-│
-├── docs/                       # Architecture diagrams, API docs
-├── docker-compose.yml
-├── .env.example
+smart-greenhouse-iot-hub/
+├── hub/                  # On-device Hub code (edge server)
+│   ├── mqtt-broker/
+│   ├── device-registry/
+│   └── ai-inference/
+├── dashboard/            # React Native / Next.js dashboard
+├── firmware/             # ESP32 device firmware
+├── ml-models/            # Training scripts, exported TFLite/ONNX models
+├── docs/                 # Architecture diagrams, literature review, reports
+>>>>>>> 7846bbe (Add project README)
 └── README.md
 ```
 
 ---
 
+<<<<<<< HEAD
 ## Getting Started
 
 ### Prerequisites
@@ -450,3 +291,19 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
   <strong>Built to empower farmers with the intelligence of data 🌱</strong><br/>
   <sub>CropFit — where IoT meets agronomic AI</sub>
 </div>
+=======
+## 📌 Domain
+
+`IoT` · `Edge Computing` · `Artificial Intelligence` · `Smart Agriculture`
+
+---
+
+## 📄 License
+
+Add your chosen license here (e.g., MIT).
+
+---
+
+## 🙌 Acknowledgements
+
+Developed as part of an Academic Year 2026 Research & Development project.
