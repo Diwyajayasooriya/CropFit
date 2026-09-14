@@ -103,6 +103,228 @@ Rules mined from `conditions` (see §5). Not tied to one node — a rule is defi
 
 ---
 
+# GreenNode — Database Setup for the ML Rule-Mining Pipeline
+
+## 1. How the database and the ML pipeline relate
+
+The ML model (a decision tree, per the design document) doesn't train on a separate dataset — it trains directly on the `conditions` table. That's the core design decision to understand before touching SQL:
+
+```
+sensor readings  ─────►  conditions (hypertable)  ─────►  training query
+                                                                │
+                                                                ▼
+                                                    DecisionTreeClassifier.fit()
+                                                                │
+                                                                ▼
+                                                    one row per leaf  ─────►  rules table
+                                                                │
+                                                                ▼
+                                              node_rules (which hub runs which rule)
+```
+
+So the schema has to satisfy two different access patterns at once:
+
+- **High-frequency writes** — every hub pushes sensor readings continuously. This is what TimescaleDB's hypertable/chunking exists for.
+- **Batch analytical reads** — the training job periodically scans a large historical slice of the same table to build a labelled dataset. This is what compression and continuous aggregates exist for.
+
+A plain Postgres table would work for the first pattern and get slow for the second as data accumulates over a season. That's the specific reason `conditions` is a hypertable and not an ordinary table.
+
+---
+
+## 2. The two tables that matter for ML
+
+### 2.1 `conditions` — the training data
+
+Every row is a labelled example: sensor state in, action taken out.
+
+```sql
+CREATE TABLE conditions (
+    reading_id     BIGSERIAL,
+    node_id        UUID NOT NULL REFERENCES nodes(node_id),
+    ts             TIMESTAMPTZ NOT NULL,
+    temperature    DOUBLE PRECISION,
+    humidity       DOUBLE PRECISION,
+    soil_moisture  DOUBLE PRECISION,
+    light          DOUBLE PRECISION,
+    co2            DOUBLE PRECISION,
+    action_taken   JSONB,     -- e.g. {"device_type": "fan", "command": "on"} — this is the label
+    source         TEXT,      -- 'sensor_realtime' | 'aggregated'
+    PRIMARY KEY (reading_id, ts)
+);
+```
+
+For this to be trainable data rather than just a log, two fields matter more than the rest:
+
+- **`action_taken`** is what makes each row a supervised-learning example rather than a plain sensor log. If a reading didn't trigger any action, this can be `NULL` — the training query below filters those out, since a decision tree needs both features and a label to learn from.
+- **`node_id`** lets you train per-node or per-crop-type models by joining back to `nodes.node_type`, rather than lumping every greenhouse together.
+
+> **Note:** `PRIMARY KEY (reading_id, ts)` — not `reading_id` alone — is a TimescaleDB requirement, not a stylistic choice: any unique or primary key on a hypertable must include the partitioning column (`ts`). Leaving `ts` out of the key will fail when you run `create_hypertable`.
+
+### 2.2 `rules` — the model's output
+
+```sql
+CREATE TABLE rules (
+    rule_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    crop_type     TEXT,
+    node_type     TEXT,
+    condition     JSONB NOT NULL,   -- e.g. {"temperature": {"op": ">", "value": 32}}
+    action        JSONB NOT NULL,   -- e.g. {"device_type": "fan", "command": "on"}
+    priority      INTEGER NOT NULL DEFAULT 0,
+    confidence    DOUBLE PRECISION, -- from the training run
+    support       DOUBLE PRECISION, -- from the training run
+    model_version TEXT,
+    status        TEXT NOT NULL DEFAULT 'draft'
+);
+```
+
+This is a plain (non-hypertable) table — it's small, low-write-volume, and doesn't need time-partitioning. `model_version` + `status` together are what let you retrain repeatedly without losing history: a new training run inserts new `draft` rows under a new `model_version` and marks the rules it replaces `deprecated`, rather than overwriting anything.
+
+---
+
+## 3. The TimescaleDB process, step by step
+
+### Step 1 — Enable the extension (once per database)
+
+```sql
+CREATE EXTENSION IF NOT EXISTS timescaledb;
+```
+
+### Step 2 — Create `conditions` as an ordinary table first, then convert it
+
+TimescaleDB hypertables are created *from* a regular table, not written as one from scratch:
+
+```sql
+CREATE TABLE conditions ( ... as above ... );
+
+SELECT create_hypertable('conditions', 'ts');
+```
+
+`create_hypertable` partitions the table into **chunks** behind the scenes — internally separate physical tables, one per time interval, that Postgres/Timescale query transparently as if they were one table. Sensor writes land in whichever chunk covers the current time; the training query's `WHERE ts BETWEEN ...` clause lets Timescale skip chunks entirely outside that range instead of scanning the whole table.
+
+> **Note:** The default chunk interval is 7 days. You can set it explicitly:
+> ```sql
+> SELECT create_hypertable('conditions', 'ts', chunk_time_interval => INTERVAL '1 day');
+> ```
+> For a single pilot greenhouse with a handful of sensors, daily chunks are a reasonable starting point — small enough that old chunks compress cleanly, large enough not to create excessive chunk overhead. I don't have a verified benchmark for your exact sensor count/frequency, so treat this as a starting point to tune once you see real write volume, not a fixed number.
+
+### Step 3 — Index for the training query's access pattern
+
+```sql
+CREATE INDEX idx_conditions_node_ts ON conditions (node_id, ts DESC);
+```
+
+The training job's typical query filters by `node_id` (or joins to `nodes` for `node_type`/`crop_type`) and a time range — this index supports exactly that, and TimescaleDB will apply it per-chunk automatically.
+
+### Step 4 — Compress older chunks
+
+This is the step that matters once you're past a few weeks of data. Compression can shrink storage substantially for time-series data like this (exact ratio depends on your data — don't take a specific percentage as given without checking your own numbers), and compressed chunks are still queryable, just not writable in place.
+
+```sql
+ALTER TABLE conditions SET (
+    timescaledb.compress,
+    timescaledb.compress_segmentby = 'node_id'
+);
+
+SELECT add_compression_policy('conditions', INTERVAL '7 days');
+```
+
+This tells Timescale: once a chunk is older than 7 days, compress it automatically as a background job. `compress_segmentby = 'node_id'` keeps each hub's readings grouped together on disk, which matches how the training job queries (per node/crop type).
+
+> **Note:** Recent readings (last 7 days, in this example) stay uncompressed and fully write-friendly for the live sensor stream; only historical data used for training gets compressed. Adjust the interval to whatever the sensor write pattern and query needs actually turn out to be.
+
+### Step 5 — (Optional but recommended) Continuous aggregates for feature engineering
+
+If the model benefits from rolled-up features — e.g. "average temperature over the last hour" rather than only instantaneous readings — a continuous aggregate keeps a materialized rollup up to date automatically, so the training query doesn't have to recompute averages over raw data every time it runs.
+
+```sql
+CREATE MATERIALIZED VIEW conditions_hourly
+WITH (timescaledb.continuous) AS
+SELECT
+    node_id,
+    time_bucket('1 hour', ts) AS bucket,
+    avg(temperature)   AS avg_temperature,
+    avg(humidity)       AS avg_humidity,
+    avg(soil_moisture)  AS avg_soil_moisture
+FROM conditions
+GROUP BY node_id, bucket;
+
+SELECT add_continuous_aggregate_policy('conditions_hourly',
+    start_offset => INTERVAL '3 days',
+    end_offset   => INTERVAL '1 hour',
+    schedule_interval => INTERVAL '1 hour');
+```
+
+> **Note:** `time_bucket()` and the continuous-aggregate policy functions are core TimescaleDB features, but exact argument names/defaults have changed across TimescaleDB versions in the past. Check the syntax against the TimescaleDB version you actually install before running this in production — don't copy this verbatim without confirming against current docs.
+
+This step is optional for a first pilot — start with raw `conditions` rows as training input (Steps 2–4 are enough for that), and add continuous aggregates once you know the model actually benefits from rolled-up features rather than instantaneous ones.
+
+### Step 6 — Retention policy (only once you're sure you don't need raw data forever)
+
+```sql
+SELECT add_retention_policy('conditions', INTERVAL '1 year');
+```
+
+This automatically drops chunks older than the interval. **Be careful with this one** — it deletes data outright, including data the model might benefit from retraining on later. For a 6-month pilot, you likely don't need this yet; it matters more once the platform is running long enough that raw historical data becomes a real storage cost rather than a training asset.
+
+---
+
+## 4. The training query itself
+
+This is the SQL the training job runs to pull a labelled dataset for one crop type before handing it to scikit-learn:
+
+```sql
+SELECT
+    c.temperature,
+    c.humidity,
+    c.soil_moisture,
+    c.light,
+    c.co2,
+    EXTRACT(HOUR FROM c.ts) AS hour_of_day,
+    c.action_taken
+FROM conditions c
+JOIN nodes n ON n.node_id = c.node_id
+WHERE n.node_type = 'tomato_greenhouse'
+  AND c.action_taken IS NOT NULL
+  AND c.ts >= now() - INTERVAL '90 days';
+```
+
+Feed this into the training script:
+
+```python
+from sklearn.tree import DecisionTreeClassifier
+
+def train_rules_for(crop_type: str, db_session):
+    X, y = load_training_data(db_session, crop_type)   # runs the query above
+    clf = DecisionTreeClassifier(max_depth=4, min_samples_leaf=20)
+    clf.fit(X, y)
+    for leaf_condition, leaf_action, support, confidence in extract_leaves(clf, X, y):
+        db_session.add(models.Rule(
+            crop_type=crop_type,
+            condition=leaf_condition,
+            action=leaf_action,
+            support=support,
+            confidence=confidence,
+            model_version=new_version_tag(),
+            status="draft",
+        ))
+    db_session.commit()
+```
+
+> **Note:** `extract_leaves()` is a placeholder for logic you write against the fitted tree's `tree_.feature`, `tree_.threshold` and `tree_.value` attributes — it isn't a built-in scikit-learn function. Verify those attribute names against the current scikit-learn docs before implementing; internal estimator APIs are exactly the kind of detail worth double-checking rather than trusting from memory.
+
+---
+
+## 5. Summary of the flow
+
+1. Hubs write raw sensor readings + whatever action was taken into `conditions` continuously.
+2. `create_hypertable` chunks that table by time so writes stay fast as data accumulates.
+3. Older chunks get compressed on a schedule, keeping storage down without deleting anything.
+4. (Optional) continuous aggregates pre-compute rolled-up features if the model needs them.
+5. A scheduled job queries `conditions` (joined to `nodes` for crop type) as labelled training data, fits a decision tree, and writes the result into `rules` as new `draft` rows tied to a `model_version`.
+6. Once reviewed/approved, `rules` rows flip to `active` and get linked to specific hubs via `node_rules`, which the hub then pulls down into its local `node_rules_cache` to run offline.
+
+This is the minimum you need to get the database and the ML pipeline talking to each other correctly. Retention policies and continuous aggregates (§3, Steps 5–6) are refinements to add once the pilot is generating real data volume — they're not required to get a first training run working.
+
 ## 3. Edge / Local tier — Node Database Implementation
 
 This section is the **actual build** of the single-node edge database — what runs on one GreenNode hub, in SQLite, on the RPi4 itself. It supersedes the earlier `local_user` / `local_node` sketch: a single hub doesn't need a multi-row "nodes" abstraction locally, it needs its own durable identity, its own allowlist of paired sub-devices, and a lean operational log. Cloud-side bookkeeping (owner, billing, fleet status) stays where it belongs — in the cloud tier's `nodes` and `user_authentication` tables.
