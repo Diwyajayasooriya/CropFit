@@ -1,0 +1,134 @@
+erDiagram
+    %% ===== CLOUD / ADMIN TIER =====
+    USER_AUTHENTICATION ||--o{ NODES : "owns"
+    USER_AUTHENTICATION ||--o| LOCAL_USER : "cached as"
+    NODES ||--o{ CONDITIONS : "reports readings to"
+    NODES ||--o{ NODE_RULES : "has installed"
+    RULES ||--o{ NODE_RULES : "installed as"
+    NODES ||--|| LOCAL_NODE : "same hub (shared node_id)"
+
+    %% ===== EDGE / LOCAL TIER =====
+    LOCAL_USER ||--o{ LOCAL_NODE : "configures"
+    LOCAL_NODE ||--o{ DEVICES : "hosts"
+    LOCAL_NODE ||--o{ CONDITION_DB : "logs"
+    DEVICES ||--o{ CONDITION_DB : "produces"
+    LOCAL_NODE ||--o{ ACTIONS_LOG : "triggers"
+    DEVICES ||--o{ ACTIONS_LOG : "receives command"
+    NODE_RULES ||--o{ NODE_RULES_CACHE : "pulled as"
+    NODE_RULES_CACHE ||--o{ ACTIONS_LOG : "fires"
+
+    %% ===== SYNC PIPELINE (batch job, not a live FK) =====
+    CONDITION_DB }o--|| CONDITIONS : "batch syncs to"
+
+    USER_AUTHENTICATION {
+        uuid user_id PK
+        string email
+        string password_hash
+        string role
+        boolean mfa_enabled
+        timestamp last_login_at
+        timestamp created_at
+    }
+
+    NODES {
+        uuid node_id PK
+        uuid owner_user_id FK
+        string node_type
+        string label
+        string location
+        string firmware_version
+        string status
+        timestamp last_seen_at
+        timestamp installed_at
+    }
+
+    CONDITIONS {
+        bigint reading_id PK
+        uuid node_id FK
+        timestamp ts
+        float temperature
+        float humidity
+        float soil_moisture
+        float light
+        float co2
+        json action_taken
+        string source
+    }
+
+    RULES {
+        uuid rule_id PK
+        string crop_type
+        json condition
+        json action
+        int priority
+        float confidence
+        string model_version
+        string status
+    }
+
+    NODE_RULES {
+        uuid node_id FK
+        uuid rule_id FK
+        timestamp installed_at
+        boolean active
+    }
+
+    LOCAL_USER {
+        uuid user_id PK
+        string name
+        string contact
+        json config
+        timestamp last_synced_at
+    }
+
+    LOCAL_NODE {
+        uuid node_id PK
+        uuid user_id FK
+        json config
+        string firmware_version
+        timestamp last_boot_at
+    }
+
+    DEVICES {
+        uuid device_id PK
+        uuid node_id FK
+        string device_type
+        string mac_address
+        string assigned_ssid
+        string health_status
+        float bandwidth_usage
+        timestamp last_seen_at
+    }
+
+    CONDITION_DB {
+        bigint reading_id PK
+        uuid node_id FK
+        uuid device_id FK
+        timestamp ts
+        float temperature
+        float humidity
+        float soil_moisture
+        float light
+        float co2
+        boolean synced
+        timestamp synced_at
+    }
+
+    NODE_RULES_CACHE {
+        uuid rule_id PK
+        uuid node_id FK
+        json condition
+        json action
+        int priority
+        timestamp pulled_at
+    }
+
+    ACTIONS_LOG {
+        bigint action_id PK
+        uuid node_id FK
+        uuid device_id FK
+        uuid rule_id FK
+        string command
+        timestamp triggered_at
+        boolean synced
+    }
