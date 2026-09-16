@@ -38,10 +38,11 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
-    'apps.authentication',
-    'apps.alerts',
-    'apps.devices',
-    'apps.rules'
+    'apps.authentication.apps.AuthenticationConfig',
+'apps.alerts.apps.AlertsConfig',
+'apps.devices.apps.DevicesConfig',
+'apps.rules.apps.RulesConfig',
+'apps.zone.apps.ZoneConfig'
 
 ]
 
