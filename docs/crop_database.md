@@ -368,12 +368,15 @@ The allowlist of third-party sensors/actuators (ESP32, Pico W, etc.) this hub tr
 | Field | Type | Notes |
 |---|---|---|
 | device_id | text, PK | sub-node's own hardware-reported ID (MAC address or chip ID) |
-| device_type | string | `sensor` \| `actuator` |
-| label | string | human-friendly, e.g. "Zone 2 Soil Moisture" |
+| device_category | string | `sensor` \| `actuator` — broad class; tells ingestion whether this device reports into `conditions` or receives commands via `actions_log` |
+| device_type | string | specific capability within that category, e.g. `temperature`, `humidity`, `soil_moisture`, `co2`, `light` for sensors; `valve`, `fan`, `light`, `heater` for actuators |
+| label | string | human-friendly display name only, e.g. "Zone 2 Soil Moisture" — cosmetic, no longer used for identification |
 | status | string | `active` \| `revoked` \| `offline` |
 | paired_at | timestamp | |
 | last_seen | timestamp | |
 | synced | boolean | whether the pairing record has been pushed to the cloud registry |
+
+Splitting the old single `device_type` (`sensor`/`actuator`) into `device_category` + `device_type` generalizes device identification: a node can now be queried or matched by exact capability ("give me this node's `humidity` sensor") instead of by its free-text `label`, which was never meant to be parsed. It also directly lines up with the `device_type` key already used in `rules.action` and `actions_log.action` (e.g. `{"device_type": "fan", "command": "on"}`) — the same vocabulary identifies a device here and drives what a rule targets there. New device types (e.g. a `co2` actuator, a `pressure` sensor) are just new `device_type` values, no schema change needed.
 
 Ingestion checks `status = 'active'` before writing anything to `conditions` — an unregistered or revoked `device_id` is rejected, not silently stored.
 
