@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "21st": {
+      "url": "https://21st.dev/api/mcp",
+      "headers": {
+        "x-api-key": "21st_sk_daa1ee6c445e7ada7bc9ebac14dff747b8903c052464325a5da9e421e7f1931d"
+      }
+    },
+    "shadcn": {
+      "command": "npx",
+      "args": ["shadcn@latest", "mcp"]
+    },
+    "gsap-master": {
+      "command": "npx",
+      "args": ["-y", "bruzethegreat-gsap-master-mcp-server@latest"]
+    },
+    "swiper": {
+      "url": "https://swiperjs.com/mcp"
+    }
+  }
+}
