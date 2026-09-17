@@ -1,24 +1,25 @@
 erDiagram
     %% ===== CLOUD / ADMIN TIER =====
     USER_AUTHENTICATION ||--o{ NODES : "owns"
-    USER_AUTHENTICATION ||--o| LOCAL_USER : "cached as"
     NODES ||--o{ CONDITIONS : "reports readings to"
     NODES ||--o{ NODE_RULES : "has installed"
     RULES ||--o{ NODE_RULES : "installed as"
-    NODES ||--|| LOCAL_NODE : "same hub (shared node_id)"
+    NODES ||--|| NODE_IDENTITY : "same hub (nodes.node_id = node_identity.node_uid)"
+    NODES ||--o{ NODE_BACKGROUND_HISTORY : "has background over time (crop, season)"
+    NODES |o--o{ RULES : "personalizes (nullable — null = fleet-wide rule)"
+    NODES ||--o{ ACTIONS_LOG_CLOUD : "logs actions for"
+    CONDITIONS |o--o{ ACTIONS_LOG_CLOUD : "triggers (nullable — null = manual override)"
 
-    %% ===== EDGE / LOCAL TIER =====
-    LOCAL_USER ||--o{ LOCAL_NODE : "configures"
-    LOCAL_NODE ||--o{ DEVICES : "hosts"
-    LOCAL_NODE ||--o{ CONDITION_DB : "logs"
-    DEVICES ||--o{ CONDITION_DB : "produces"
-    LOCAL_NODE ||--o{ ACTIONS_LOG : "triggers"
-    DEVICES ||--o{ ACTIONS_LOG : "receives command"
+    %% ===== EDGE / LOCAL TIER (single-hub SQLite) =====
+    NODE_IDENTITY ||--o{ CONNECTED_DEVICES : "pairs"
+    CONNECTED_DEVICES ||--o{ CONDITIONS_EDGE : "produces"
+    CONNECTED_DEVICES ||--o{ ACTIONS_LOG : "receives command"
     NODE_RULES ||--o{ NODE_RULES_CACHE : "pulled as"
-    NODE_RULES_CACHE ||--o{ ACTIONS_LOG : "fires"
+    CONDITIONS_EDGE ||--o{ ACTIONS_LOG : "triggers (nullable)"
 
     %% ===== SYNC PIPELINE (batch job, not a live FK) =====
-    CONDITION_DB }o--|| CONDITIONS : "batch syncs to"
+    CONDITIONS_EDGE }o--|| CONDITIONS : "batch syncs to, keyed (node_uid, local_id)"
+    ACTIONS_LOG }o--|| ACTIONS_LOG_CLOUD : "batch syncs to, keyed (node_uid, local_id)"
 
     USER_AUTHENTICATION {
         uuid user_id PK
@@ -44,24 +45,27 @@ erDiagram
 
     CONDITIONS {
         bigint reading_id PK
+        timestamp ts PK
         uuid node_id FK
-        timestamp ts
         float temperature
         float humidity
         float soil_moisture
         float light
         float co2
-        json action_taken
         string source
     }
 
     RULES {
         uuid rule_id PK
+        uuid node_id FK "nullable — null = fleet-wide, set = personalized to one hub"
+        string scope "fleet or node"
         string crop_type
+        string node_type
         json condition
         json action
         int priority
         float confidence
+        float support
         string model_version
         string status
     }
@@ -73,62 +77,69 @@ erDiagram
         boolean active
     }
 
-    LOCAL_USER {
-        uuid user_id PK
-        string name
-        string contact
-        json config
-        timestamp last_synced_at
-    }
-
-    LOCAL_NODE {
-        uuid node_id PK
-        uuid user_id FK
-        json config
-        string firmware_version
-        timestamp last_boot_at
-    }
-
-    DEVICES {
-        uuid device_id PK
+    NODE_BACKGROUND_HISTORY {
+        bigint history_id PK
         uuid node_id FK
-        string device_type
-        string mac_address
-        string assigned_ssid
-        string health_status
-        float bandwidth_usage
-        timestamp last_seen_at
+        string crop_type
+        string season_label
+        timestamp started_at
+        timestamp ended_at "nullable — null = current background"
     }
 
-    CONDITION_DB {
-        bigint reading_id PK
+    ACTIONS_LOG_CLOUD {
+        bigint action_id PK
         uuid node_id FK
-        uuid device_id FK
-        timestamp ts
-        float temperature
-        float humidity
-        float soil_moisture
-        float light
-        float co2
+        text device_id
+        string action
+        string triggered_by "rule, manual, ml"
+        string source_ref
+        bigint condition_reading_id FK "nullable, references conditions.reading_id"
+        timestamp executed_at
+    }
+
+    NODE_IDENTITY {
+        int id PK "always 1"
+        text node_uid "unique, factory code"
+        text hardware_serial
+        text firmware_version
+        timestamp provisioned_at
+    }
+
+    CONNECTED_DEVICES {
+        text device_id PK
+        string device_category "sensor or actuator"
+        string device_type "temperature, humidity, valve, light..."
+        string label "cosmetic display name"
+        string status
+        timestamp paired_at
+        timestamp last_seen
         boolean synced
-        timestamp synced_at
+    }
+
+    CONDITIONS_EDGE {
+        int id PK
+        text device_id FK
+        string metric
+        float value
+        timestamp recorded_at
+        boolean synced
     }
 
     NODE_RULES_CACHE {
-        uuid rule_id PK
-        uuid node_id FK
-        json condition
-        json action
-        int priority
-        timestamp pulled_at
+        int rule_id PK
+        json condition_json
+        json action_json
+        int version
+        timestamp updated_at
     }
 
     ACTIONS_LOG {
-        bigint action_id PK
-        uuid node_id FK
-        uuid device_id FK
-        uuid rule_id FK
-        string command
-        timestamp triggered_at
+        int id PK
+        text device_id FK
+        string action
+        string triggered_by "rule, manual, ml"
+        string source_ref
+        int condition_id FK "nullable"
+        timestamp executed_at
         boolean synced
     }
