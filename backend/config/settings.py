@@ -46,7 +46,13 @@ INSTALLED_APPS = [
 'apps.alerts.apps.AlertsConfig',
 'apps.devices.apps.DevicesConfig',
 'apps.rules.apps.RulesConfig',
-'apps.zone.apps.ZoneConfig'
+'apps.zone.apps.ZoneConfig',
+    'apps.rules.apps.RulesConfig',
+    'apps.commands.apps.CommandsConfig',
+    'apps.sensorHistory.apps.SensorhistoryConfig',
+    'apps.greenhouses.apps.GreenhousesConfig',
+    'apps.reports.apps.ReportsConfig'
+
 
 ]
 
