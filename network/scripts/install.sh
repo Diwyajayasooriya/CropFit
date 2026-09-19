@@ -8,6 +8,8 @@
 #   config/wpa_supplicant/wpa_supplicant.conf
 #   config/udev/70-greennode-net.rules
 # and edit registry/devices.csv for your actual sub-nodes.
+# See README.md "What's customizable" for the full list, including the
+# pairing watcher's BACKEND_FINALIZE_URL once your FastAPI route exists.
 set -euo pipefail
 
 if [[ $EUID -ne 0 ]]; then
@@ -58,7 +60,7 @@ echo "== 7/9: IP forwarding + nftables (NAT + inter-subnet isolation) =="
 bash "$REPO_DIR/scripts/enable-ip-forwarding.sh"
 bash "$REPO_DIR/scripts/nftables-rules.sh"
 
-echo "== 8/9: HTB bandwidth trees =="
+echo "== 8/10: HTB bandwidth trees =="
 # tc setup needs to re-run after each boot once interfaces exist — done via
 # a oneshot systemd unit chained after hostapd brings wlan1/_1/_2 up.
 cat > /etc/systemd/system/greennode-tc.service <<EOF
@@ -80,10 +82,15 @@ EOF
 systemctl daemon-reload
 systemctl enable greennode-tc.service
 
-echo "== 9/9: shedding daemon =="
+echo "== 9/10: shedding daemon =="
 cp "$REPO_DIR/systemd/greennode-shedding.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable greennode-shedding.service
+
+echo "== 10/10: pairing watcher (device detection + provisioning handoff) =="
+cp "$REPO_DIR/systemd/greennode-pairing-watcher.service" /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable greennode-pairing-watcher.service
 
 echo ""
 echo "== Enabling services (will start on next boot / now) =="
@@ -93,10 +100,13 @@ systemctl restart hostapd
 systemctl restart dnsmasq
 systemctl start greennode-tc.service
 systemctl start greennode-shedding.service
+systemctl start greennode-pairing-watcher.service
 
 echo ""
 echo "[done] Verify with:"
-echo "  systemctl status hostapd dnsmasq greennode-tc greennode-shedding"
+echo "  systemctl status hostapd dnsmasq greennode-tc greennode-shedding greennode-pairing-watcher"
 echo "  iw dev wlan0 link"
 echo "  tc -s class show dev wlan1"
 echo "  journalctl -u greennode-shedding -f"
+echo "  journalctl -u greennode-pairing-watcher -f"
+echo "  curl http://127.0.0.1:8091/pairing/status   # pairing watcher control endpoint"

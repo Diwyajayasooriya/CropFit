@@ -1,0 +1,19 @@
+[Unit]
+Description=GreenNode pairing watcher (device detection + provisioning handoff)
+After=network.target hostapd.service
+Requires=hostapd.service
+
+[Service]
+Type=simple
+# Set BACKEND_FINALIZE_URL once the main backend's finalize route exists —
+# until then this runs in stub mode (pending devices logged to
+# registry/pending-devices.txt instead of auto-registered). See the
+# docstring in scripts/pairing_watcher.py for the other env vars.
+# Environment=BACKEND_FINALIZE_URL=http://127.0.0.1:8000/internal/provision/finalize
+ExecStart=/usr/bin/python3 /opt/greennode-network/scripts/pairing_watcher.py
+Restart=on-failure
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target

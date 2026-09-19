@@ -160,6 +160,85 @@ Shedding logic runs as a small daemon, polling on an interval, acting in two sta
 
 Device priority tiers are config, not hardcoded: actuators are never shed, irrigation-linked sensors are shed last, routine ambient telemetry is shed first.
 
+### 1.11 What a WPA2 passphrase actually is
+
+Worth being precise about this since it underpins the provisioning design below. WPA2 is the encryption/authentication protocol; the passphrase is not itself the encryption key. What actually happens:
+
+1. The passphrase + SSID are run through PBKDF2 (4096 iterations) to derive a **PMK (Pairwise Master Key)** — a fixed 256-bit value both sides can compute independently, without ever transmitting the passphrase itself.
+2. During the 4-way handshake (Section 1.3), the AP and STA combine the PMK with random nonces exchanged in that handshake to derive a **PTK (Pairwise Transient Key)** — a session-specific key.
+3. The PTK, not the passphrase or even the PMK, is what actually encrypts data frames.
+
+So the passphrase is the thing that lets both sides arrive at the same starting secret without saying it aloud. This matters for the provisioning network below: a passphrase baked identically into every device's firmware still encrypts that link, but it can't function as a *per-device* identity check — anyone who extracts it from one unit knows it for all of them. That's fine as long as something else is doing the real access control.
+
+### 1.12 Device provisioning — how GreenNode identifies a new device
+
+An unprovisioned ESP32 doesn't know any of the three real SSIDs' passphrases. So there's a fourth, deliberately low-trust network (`greennode-provision`, BSS3, `wlan1_3`, `10.0.13.0/24`) whose only job is onboarding. Its passphrase is fixed and baked into every device's firmware image before deployment — per 1.11, that's an acceptable link-encryption boundary but not an identity check, so it isn't treated as one.
+
+The key design point: **identification does not depend on the device announcing itself at the application layer.** `hostapd` already knows the moment any device associates, via its control socket:
+
+```
+AP-STA-CONNECTED aa:bb:cc:dd:ee:ff
+AP-STA-DISCONNECTED aa:bb:cc:dd:ee:ff
+```
+
+GreenNode's pairing watcher (`scripts/pairing_watcher.py`) attaches to this socket directly (Unix datagram socket, `ATTACH` command, per hostapd's control-interface protocol) and sees every association on `wlan1_3` in real time — no cooperation needed from the device's firmware beyond joining WiFi, which every device has to do anyway.
+
+The actual access control is a **pairing window**, not the passphrase:
+
+```
+Operator (frontend)                 GreenNode                          ESP32
+ |                                     |                                 |
+ | 1. Press "+", re-enter password     |                                 |
+ |------------------------------------>|                                 |
+ |     (main backend verifies, then    |                                 |
+ |      POSTs /pairing/open to the     |                                 |
+ |      pairing watcher's loopback-    |                                 |
+ |      only control port)             |                                 |
+ |                                     |                                 |
+ |                                     |   2. Window open (e.g. 120s)    |
+ |                                     |                                 |
+ |                                     |<-- associates on wlan1_3 -------|
+ |                                     |   (fixed SSID+passphrase,       |
+ |                                     |    that's ALL its firmware      |
+ |                                     |    needs to do)                 |
+ |                                     |                                 |
+ |                                     |   3. hostapd fires               |
+ |                                     |      AP-STA-CONNECTED <mac>     |
+ |                                     |      -> watcher records it,     |
+ |                                     |         only because a window   |
+ |                                     |         is open right now       |
+ |                                     |                                 |
+ |                                     |<-- GET /provision --------------|
+ |                                     |   (one hardcoded request to     |
+ |                                     |    the gateway IP, 10.0.13.1 —   |
+ |                                     |    no discovery needed, that    |
+ |                                     |    IP never changes)            |
+ |                                     |                                 |
+ |                                     |   4. watcher maps source IP ->  |
+ |                                     |      MAC via dnsmasq's lease    |
+ |                                     |      file, confirms that MAC    |
+ |                                     |      was seen in an open window |
+ |                                     |                                 |
+ |                                     |   5. hands off to the main      |
+ |                                     |      backend to create the      |
+ |                                     |      device record + generate   |
+ |                                     |      real MQTT/WiFi credentials |
+ |                                     |                                 |
+ |                                     |--- 200 OK {creds} ------------->|
+ |                                     |                                 |
+ |                                     |   6. ESP32 stores creds in NVS, |
+ |                                     |      disconnects from wlan1_3,  |
+ |                                     |      joins its real SSID        |
+```
+
+Outside an open window, `AP-STA-CONNECTED` events are logged but never acted on, and `GET /provision` is rejected outright — so a device sitting on the provisioning network unclaimed can't do anything except wait. `nftables` backs this up independently: `wlan1_3` can reach nothing on GreenNode except the pairing watcher's one port, and gets no forwarding anywhere else at all (Section 2, `nftables-rules.sh`) — so even if the window/MAC checks were somehow bypassed, there's nowhere for that traffic to go.
+
+### 1.13 Minimal config now vs. real third-party devices later
+
+The fixed-SSID-in-firmware approach above is reasonable *because GreenNode controls that firmware* — there's no vendor boundary to cross for a prototype built entirely in-house. It's the right amount of effort for proving the architecture.
+
+A real off-the-shelf third-party sensor won't ship with GreenNode's specific SSID hardcoded in it, so a production version would need a different first step — device-as-temporary-AP (SoftAP) provisioning, BLE provisioning, or QR/NFC-assisted pairing are the standard answers, and if GreenNode ends up aggregating sensors from multiple vendors it likely needs a small plugin system (one adapter per provisioning method) rather than one fixed flow. That's a real scope decision for later, deliberately deferred rather than built now — see `learnings-and-principles.md`. Everything else in 1.12 (event-driven detection, the password-gated pairing window, the locked-down handoff subnet) carries over unchanged regardless of which first-contact mechanism eventually replaces the fixed passphrase.
+
 ---
 
 ## Part 2 — Implementation
@@ -170,21 +249,26 @@ Device priority tiers are config, not hardcoded: actuators are never shed, irrig
 greennode-network/
 ├── README.md                          (this file)
 ├── config/
-│   ├── hostapd/hostapd.conf           (multi-BSS AP config, wlan1/wlan1_1/wlan1_2)
+│   ├── hostapd/hostapd.conf           (multi-BSS AP config: wlan1/wlan1_1/wlan1_2/wlan1_3)
 │   ├── wpa_supplicant/wpa_supplicant.conf   (STA uplink config, wlan0)
-│   ├── dnsmasq/dnsmasq.conf           (per-subnet DHCP + static reservations)
+│   ├── dnsmasq/dnsmasq.conf           (per-subnet DHCP + static reservations + provisioning)
 │   ├── dhcpcd/dhcpcd-append.conf      (static IPs for AP interfaces)
 │   └── udev/70-greennode-net.rules    (pins USB adapter to wlan1 by MAC)
-├── registry/devices.csv               (MAC → IP → tier → interface mapping — edit this per deployment)
+├── registry/
+│   ├── devices.csv                    (MAC → IP → tier → interface mapping — permanent, provisioned devices)
+│   └── pending-devices.txt            (auto-created; provisioning watcher's stub-mode output, see 2.3)
 ├── scripts/
 │   ├── install.sh                     (one-shot setup: packages, configs, services)
 │   ├── enable-ip-forwarding.sh
-│   ├── nftables-rules.sh              (NAT + inter-subnet isolation)
-│   ├── tc-htb-setup.sh                (base HTB trees, 3 interfaces)
+│   ├── nftables-rules.sh              (NAT + inter-subnet isolation + provisioning lockdown)
+│   ├── tc-htb-setup.sh                (base HTB trees, 4 interfaces incl. provisioning flat cap)
 │   ├── tc-add-device-classes.sh       (per-device leaf classes from registry/devices.csv)
-│   └── shedding_daemon.py             (adaptive shedding, polls RSSI + tc stats)
+│   ├── generate-dhcp-hosts.sh         (regenerates dnsmasq static reservations from registry/devices.csv)
+│   ├── shedding_daemon.py             (adaptive shedding, polls RSSI + tc stats)
+│   └── pairing_watcher.py             (device detection via hostapd events + provisioning handoff — see 1.12)
 └── systemd/
-    └── greennode-shedding.service
+    ├── greennode-shedding.service
+    └── greennode-pairing-watcher.service
 ```
 
 ### 2.2 Deployment order
@@ -192,9 +276,45 @@ greennode-network/
 1. Flash Raspberry Pi OS (Bookworm or later), enable SSH.
 2. Plug in the USB WiFi adapter, confirm it's `hostapd`-AP-mode-capable (`iw list` → check for `AP` under `Supported interface modes`).
 3. Find its MAC address (`ip link show`), fill it into `config/udev/70-greennode-net.rules` so it's always named `wlan1` regardless of USB enumeration order.
-4. Fill in real upstream SSID/passphrase in `config/wpa_supplicant/wpa_supplicant.conf`, and real sub-node SSIDs/passphrases in `config/hostapd/hostapd.conf`.
-5. Fill in real ESP32 MAC addresses in `registry/devices.csv` as sub-nodes are provisioned.
+4. Fill in real upstream SSID/passphrase in `config/wpa_supplicant/wpa_supplicant.conf`, and real sub-node/provisioning SSIDs/passphrases in `config/hostapd/hostapd.conf`.
+5. Fill in real ESP32 MAC addresses in `registry/devices.csv` for any devices you're pre-registering directly; devices onboarded through the pairing flow (1.12) get added automatically once the main backend's finalize route exists.
 6. Run `scripts/install.sh` as root.
-7. Verify: `systemctl status hostapd dnsmasq greennode-shedding`, `tc -s class show dev wlan1`, `iw dev wlan0 link`.
+7. Verify: `systemctl status hostapd dnsmasq greennode-shedding greennode-pairing-watcher`, `tc -s class show dev wlan1`, `iw dev wlan0 link`, `curl http://127.0.0.1:8091/pairing/status`.
 
 See inline comments in each config/script for what needs to be filled in before first boot — placeholders are marked `CHANGE_ME`.
+
+### 2.3 Pairing watcher — standalone-testable by design
+
+`pairing_watcher.py` runs independently of the main FastAPI backend and works two ways:
+
+- **Stub mode** (default, no config needed): `BACKEND_FINALIZE_URL` unset. Detected devices are appended to `registry/pending-devices.txt` (`epoch,mac,ip`) instead of being auto-registered. This lets you test the whole detection/pairing-window/handoff path — open a window, join an ESP32, watch it get logged — before the main backend's device-registration route exists at all.
+- **Integrated mode**: set `BACKEND_FINALIZE_URL` to your FastAPI app's internal finalize route (e.g. `http://127.0.0.1:8000/internal/provision/finalize`), uncomment the `Environment=` line in `systemd/greennode-pairing-watcher.service`. The watcher then POSTs `{"mac": ..., "ip": ...}` to it and expects back the JSON credential payload to hand the ESP32.
+
+The main backend controls pairing windows via the watcher's loopback-only control API:
+```
+POST http://127.0.0.1:8091/pairing/open   {"seconds": 120}
+POST http://127.0.0.1:8091/pairing/close
+GET  http://127.0.0.1:8091/pairing/status
+```
+This is the integration point for the "+ Add device" button's server-side handler — after your FastAPI route verifies the operator's password, it calls `/pairing/open` on this control port.
+
+### 2.4 What's customizable — checklist
+
+Everything below is a point where the repo hands you a working default that you're expected to change per deployment or per your own backend's shape. Grouped by file:
+
+| File | What to customize |
+|---|---|
+| `config/hostapd/hostapd.conf` | The four `wpa_passphrase` values (`CHANGE_ME_*`); `channel=1` if your site's upstream router isn't on channel 6 (pick a non-overlapping channel — 1/6/11 — away from whatever `wpa_supplicant` connects to); `country_code` if deploying outside Sri Lanka |
+| `config/wpa_supplicant/wpa_supplicant.conf` | Real upstream `ssid`/`psk`; add more `network={}` blocks for fallback sites (e.g. a backup mobile hotspot) — `priority=` picks between them |
+| `config/udev/70-greennode-net.rules` | The USB adapter's real MAC address (`CHANGE_ME:MAC:...`) |
+| `config/dnsmasq/dnsmasq.conf` | DHCP range sizes per subnet if you expect more than ~190 devices on one SSID; lease times (provisioning is deliberately short, 5m — sensors/actuators are 12h) |
+| `registry/devices.csv` | Every row — this is your actual device fleet: MAC, reserved IP, interface, priority tier, rate/ceil, name |
+| `scripts/tc-htb-setup.sh` | `TOTAL_RATE` (set to your USB adapter's realistic throughput, not its PHY rate); the per-SSID `rate`/`ceil`/`prio` triples if your actuator:sensor traffic ratio differs from the assumed split |
+| `scripts/nftables-rules.sh` | `PROVISION_PORT` if you change `pairing_watcher.py`'s `PROVISION_PORT` env var — the two must match |
+| `scripts/pairing_watcher.py` | `DEFAULT_WINDOW_SECONDS` (how long a pairing window stays open); `BACKEND_FINALIZE_URL` (unset = stub mode, see 2.3) |
+| `systemd/greennode-pairing-watcher.service` | Uncomment + set `Environment=BACKEND_FINALIZE_URL=...` once your FastAPI finalize route exists |
+| `scripts/shedding_daemon.py` | `RSSI_DEGRADED_DBM`/`RSSI_RECOVERED_DBM` thresholds and `CONSECUTIVE_POLLS_TO_ACT` — tune these once you have real RSSI readings from your actual greenhouse site rather than the placeholder defaults |
+
+Not customizable per-deployment, but worth knowing where they live if requirements change: the inter-subnet isolation logic (`nftables-rules.sh` forward chain), the HTB tree structure itself (`tc-htb-setup.sh`'s `setup_tree` function), and the hostapd-event detection mechanism (`pairing_watcher.py`'s `hostapd_listener` function) — these are architecture, not per-site configuration.
+
+Everything not covered by `pairing_watcher.py`'s stub mode — the actual FastAPI `/internal/provision/finalize` route, the SQLite `devices` table, MQTT credential/ACL generation — lives in your main backend codebase, outside this repo, and is the next piece to build.

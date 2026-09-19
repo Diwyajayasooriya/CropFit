@@ -48,4 +48,15 @@ setup_tree wlan1_1 5mbit  20mbit 0
 # admin: small floor, mid priority — occasional admin/diagnostic traffic
 setup_tree wlan1_2 2mbit  20mbit 5
 
+# provisioning: flat, low, shared cap — no per-device classes here (devices
+# are transient, gone within a pairing window), just enough to stop an
+# unclaimed device from being able to flood the radio while it sits
+# unprovisioned. Lowest priority — never worth delaying real sensor/
+# actuator traffic for.
+tc qdisc del dev wlan1_3 root 2>/dev/null || true
+tc qdisc add dev wlan1_3 root handle 1: htb default 10
+tc class add dev wlan1_3 parent 1: classid 1:1 htb rate 1mbit ceil 1mbit
+tc class add dev wlan1_3 parent 1:1 classid 1:10 htb rate 256kbit ceil 1mbit prio 7
+echo "[ok] Flat cap on wlan1_3 (provisioning, 256kbit/1mbit — no per-device classes, devices are transient)"
+
 echo "[ok] Base HTB trees ready. Run tc-add-device-classes.sh next."
