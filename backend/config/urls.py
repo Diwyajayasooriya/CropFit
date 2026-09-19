@@ -17,8 +17,13 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path,include
 
+admin.site.site_header = "CropFit Administration"
+admin.site.site_title = "CropFit Admin Portal"
+admin.site.index_title = "Welcome to CropFit Admin Portal"
+
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth',include('apps.authentication.urls'),name='auth'),
+    path('api/sensor',include('apps.node.urls'),name='sensordata')
 
 ]
