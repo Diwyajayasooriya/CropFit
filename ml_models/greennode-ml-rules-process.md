@@ -58,10 +58,6 @@ The inference split follows the existing edge/cloud architecture: rule *evaluati
 - Cold-start handling for a brand-new greenhouse with no `actions_log` history yet — does it inherit action-model behavior from similar crop/location greenhouses, or start rule-only until enough data accumulates?
 - How much of Stage 3's action vocabulary needs to be fixed in advance (a known set of actuator/action types) versus discovered from whatever actuators a given greenhouse actually has connected, since actuators are third-party and not standardized.
 
-
-
-
-
 # GreenNode — Rules, ML Process & Agronomic Thresholds
 
 This document establishes the architecture for how the "rules" concept and the Machine Learning (ML) pipeline integrate within GreenNode. It maps the connection between the edge database (`conditions`, `node_rules_cache`, `actions_log`) and the agronomic parameters required for autonomous greenhouse control.
@@ -82,15 +78,15 @@ Because a brand-new greenhouse has no history to learn from, the system must rel
 
 | Parameter | Minimum / Lower Trigger | Optimal Target Range | Maximum / Upper Trigger | IoT Automation & Control Logic |
 | :--- | :--- | :--- | :--- | :--- |
-| **Air Temperature** | 12°C (Absolute Min)[cite: 1] | 17-27°C (Coastal) <br> 17-22°C (Inland)[cite: 1] | 32°C (Absolute Max) <br> >27-28°C (Cooling trigger)[cite: 1] | Activate heating if <12°C[cite: 1]. Open passive vents if >17-22°C[cite: 1]. Trigger active evaporative cooling if >27-28°C[cite: 1]. Modulate heating to maintain a 5-7°C day-night differential[cite: 1]. |
-| **Soil Temperature** | 14°C[cite: 1] | >14°C[cite: 1] | N/A | Activate in-bed or floor pipe heating if root zone drops below 14°C[cite: 1]. |
-| **Relative Humidity (RH)** | 60% (Stress threshold)[cite: 1] | 70% - 90%[cite: 1] | 95% (Disease risk)[cite: 1] | Trigger misting/fogging if <60%[cite: 1]. Trigger venting/heating to dehumidify if >95%[cite: 1]. Force RH down to 70-80% at dusk to prevent condensation; run a dawn dehumidification cycle[cite: 1]. |
-| **Solar Radiation** | 8.5 MJ/m²/day (2.34 kWh/m²/day) or 6 hours light[cite: 1] | > 500-550 hours (over 3 winter months)[cite: 1] | N/A | Turn on supplemental lighting if daily integral falls below 8.5 MJ/m²[cite: 1]. Keep thermal screens closed on cold mornings until external radiation hits 50-150 W/m²[cite: 1]. |
-| **CO₂ Concentration** | 340-370 µmol/mol (Ambient baseline)[cite: 1] | 700-900 µmol/mol (When closed)[cite: 1] | N/A | Inject CO₂ to reach 700-900 µmol/mol only when roof/side ventilators are fully closed[cite: 1]. When vents are open, maintain baseline 340-370 µmol/mol to prevent depletion[cite: 1]. |
-| **Internal Air Velocity** | N/A | < 0.5 m/s[cite: 1] | 0.5 m/s[cite: 1] | Throttle mechanical ventilation fans so canopy-level air currents do not exceed 0.5 m/s[cite: 1]. |
-| **External Wind Speed** | N/A | < 2.0 m/s (Buoyancy driven)[cite: 1] | > 2.0 m/s (Wind driven)[cite: 1] | Adjust ventilator flap angles dynamically; external winds >2 m/s dominate internal air exchange, bypassing thermal buoyancy[cite: 1]. |
-| **Irrigation (Soil)** | -20 kPa (Coarse)<br>-30 kPa (Medium)<br>-40 kPa (Fine)[cite: 1] | Varies by soil texture[cite: 1] | -10 kPa (Upper limit / Field capacity)[cite: 1] | Read tensiometers; actuate drip lines when matric potential hits the lower limit for the specific soil type, and shut off at -10 kPa[cite: 1]. |
-| **Irrigation (Substrates)** | N/A | 5-10% of available water capacity[cite: 1] | N/A | Dose 5-10% of substrate capacity per event, automatically appending a 20-40% leaching fraction to the volume based on the nutrient solution's electrical conductivity (EC)[cite: 1]. |
+| **Air Temperature** | 12°C (Absolute Min) | 17-27°C (Coastal) <br> 17-22°C (Inland) | 32°C (Absolute Max) <br> >27-28°C (Cooling trigger) | Activate heating if <12°C. Open passive vents if >17-22°C. Trigger active evaporative cooling if >27-28°C. Modulate heating to maintain a 5-7°C day-night differential. |
+| **Soil Temperature** | 14°C | >14°C | N/A | Activate in-bed or floor pipe heating if root zone drops below 14°C. |
+| **Relative Humidity (RH)** | 60% (Stress threshold) | 70% - 90% | 95% (Disease risk) | Trigger misting/fogging if <60%. Trigger venting/heating to dehumidify if >95%. Force RH down to 70-80% at dusk to prevent condensation; run a dawn dehumidification cycle. |
+| **Solar Radiation** | 8.5 MJ/m²/day (2.34 kWh/m²/day) or 6 hours light | > 500-550 hours (over 3 winter months) | N/A | Turn on supplemental lighting if daily integral falls below 8.5 MJ/m². Keep thermal screens closed on cold mornings until external radiation hits 50-150 W/m². |
+| **CO₂ Concentration** | 340-370 µmol/mol (Ambient baseline) | 700-900 µmol/mol (When closed) | N/A | Inject CO₂ to reach 700-900 µmol/mol only when roof/side ventilators are fully closed. When vents are open, maintain baseline 340-370 µmol/mol to prevent depletion. |
+| **Internal Air Velocity** | N/A | < 0.5 m/s | 0.5 m/s | Throttle mechanical ventilation fans so canopy-level air currents do not exceed 0.5 m/s. |
+| **External Wind Speed** | N/A | < 2.0 m/s (Buoyancy driven) | > 2.0 m/s (Wind driven) | Adjust ventilator flap angles dynamically; external winds >2 m/s dominate internal air exchange, bypassing thermal buoyancy. |
+| **Irrigation (Soil)** | -20 kPa (Coarse)<br>-30 kPa (Medium)<br>-40 kPa (Fine) | Varies by soil texture | -10 kPa (Upper limit / Field capacity) | Read tensiometers; actuate drip lines when matric potential hits the lower limit for the specific soil type, and shut off at -10 kPa. |
+| **Irrigation (Substrates)** | N/A | 5-10% of available water capacity | N/A | Dose 5-10% of substrate capacity per event, automatically appending a 20-40% leaching fraction to the volume based on the nutrient solution's electrical conductivity (EC). |
 
 ## 3. Stage 2 — Adapting the Threshold Over Time
 
@@ -128,3 +124,5 @@ The inference split follows the edge/cloud architecture. Rule evaluation occurs 
 *   **Action Granularity:** How coarse should action durations be? Should they be fixed intervals, farmer-configurable ranges, or continuous durations predicted and bucketed by the model?
 *   **Cold-Start Action Handling:** For a new greenhouse lacking an `actions_log` history, does it inherit action-model behavior from similar crop/location profiles, or default to rigid rule-based logic until enough local data accumulates?
 *   **Actuator Vocabulary:** How much of Stage 3's action vocabulary needs to be fixed in advance versus discovered dynamically, given that third-party actuators lack strict standardization?
+
+
