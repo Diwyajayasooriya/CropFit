@@ -2,14 +2,24 @@
 """
 GreenNode pairing watcher.
 
-Two jobs:
+Three jobs:
 
 1. Listens directly to hostapd's control socket for the provisioning BSS
    (wlan1_3) and records AP-STA-CONNECTED events — this is how GreenNode
    finds out a device is trying to join, the moment it associates, with
    zero cooperation needed from the device's firmware beyond joining WiFi.
 
-2. Runs two small HTTP endpoints (stdlib only, no framework dependency):
+2. Finalizes provisioning ENTIRELY LOCALLY, no cloud round-trip required:
+   allocates an IP in the target subnet, appends a row to
+   registry/devices.csv, generates a Mosquitto user + scoped ACL entry,
+   regenerates dnsmasq/tc config for the new device, and inserts a
+   `connected_devices` row in the local edge SQLite DB. This matches the
+   project's offline-first principle — pairing a device on the LAN must
+   not require internet/cloud reachability. A best-effort, non-blocking
+   sync notification is sent to the cloud backend afterward if
+   BACKEND_FINALIZE_URL is set; its failure never blocks provisioning.
+
+3. Runs two small HTTP endpoints (stdlib only, no framework dependency):
 
    - PUBLIC (0.0.0.0:PROVISION_PORT, reachable only from the provisioning
      subnet — nftables enforces this, see scripts/nftables-rules.sh):
@@ -17,34 +27,42 @@ Two jobs:
      An ESP32 hits this after joining greennode-provision. The watcher
      maps the request's source IP back to a MAC via dnsmasq's lease file,
      checks whether that MAC was seen associating during an OPEN pairing
-     window, and if so hands off to the main backend to finalize
-     registration and get back real credentials.
+     window, and if so finalizes locally and hands back real credentials.
 
    - LOOPBACK ONLY (127.0.0.1:CONTROL_PORT):
-       POST /pairing/open    body: {"seconds": 120}   -- open a window
-       POST /pairing/close                            -- close it early
-       GET  /pairing/status                           -- window state +
-                                                          devices seen
-     The main backend calls these after the operator re-authenticates
-     in the frontend (see README.md Part 3 for the full sequence).
+       POST /pairing/open   body: {"seconds": 120, "device_type": "sensor",
+                                    "name": "esp32-soil-moisture-02"}
+       POST /pairing/close
+       GET  /pairing/status
+     The main backend calls /pairing/open after the operator
+     re-authenticates AND has already chosen the device type + a name in
+     the frontend — simplification vs. asking after the MAC is seen:
+     since only one device can be paired per window anyway, asking
+     upfront removes a round trip with no real UX cost given the window
+     is short. See DATA_PIPELINE.md if this trade-off needs revisiting.
 
 Configuration is via environment variables, all with sane defaults — see
 the CONFIG block below. Meant to run as its own systemd service
 (systemd/greennode-pairing-watcher.service), independent of the shedding
 daemon and of whatever framework the main backend uses.
 
-BACKEND INTEGRATION POINT: if BACKEND_FINALIZE_URL is unset, this runs in
-"stub mode" — pending devices are written to registry/pending-devices.txt
-for manual/visual confirmation instead of being auto-registered. This is
-deliberately usable on its own before the real backend's finalize route
-exists, so the pairing/detection half of the system can be tested
-independently. Set BACKEND_FINALIZE_URL once that route is built.
+BACKEND INTEGRATION POINT: BACKEND_FINALIZE_URL is now optional and
+best-effort only — if set, a device-registered notification is POSTed
+to it in a background thread purely for cloud-side sync, after local
+provisioning has already succeeded. If unset, or if the call fails
+(no internet, backend down), the device is still fully usable locally;
+nothing here blocks on cloud reachability.
 """
 
+import csv
+import ipaddress
 import json
 import logging
 import os
+import secrets
 import socket
+import sqlite3
+import subprocess
 import threading
 import time
 import urllib.request
@@ -58,8 +76,41 @@ PROVISION_PORT = int(os.environ.get("PROVISION_PORT", "8090"))
 CONTROL_PORT = int(os.environ.get("CONTROL_PORT", "8091"))
 DEFAULT_WINDOW_SECONDS = int(os.environ.get("DEFAULT_WINDOW_SECONDS", "120"))
 DNSMASQ_LEASES = Path(os.environ.get("DNSMASQ_LEASES", "/var/lib/misc/dnsmasq.leases"))
-BACKEND_FINALIZE_URL = os.environ.get("BACKEND_FINALIZE_URL", "")  # e.g. http://127.0.0.1:8000/internal/provision/finalize
-PENDING_FILE = Path(__file__).resolve().parent.parent / "registry" / "pending-devices.txt"
+BACKEND_FINALIZE_URL = os.environ.get("BACKEND_FINALIZE_URL", "")  # optional, best-effort only now
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DEVICES_CSV = Path(os.environ.get("DEVICES_CSV", str(REPO_ROOT / "registry" / "devices.csv")))
+GEN_DHCP_SCRIPT = REPO_ROOT / "scripts" / "generate-dhcp-hosts.sh"
+GEN_TC_SCRIPT = REPO_ROOT / "scripts" / "tc-add-device-classes.sh"
+
+EDGE_DB_PATH = os.environ.get("EDGE_DB_PATH", "/opt/greennode-edge/greennode.db")
+MOSQUITTO_PASSWD_FILE = os.environ.get("MOSQUITTO_PASSWD_FILE", "/etc/mosquitto/passwd")
+MOSQUITTO_ACL_FILE = os.environ.get("MOSQUITTO_ACL_FILE", "/etc/mosquitto/acl.d/greennode.acl")
+
+# Must match the corresponding wpa_passphrase values in
+# config/hostapd/hostapd.conf — kept here as env vars (set in the systemd
+# unit) rather than parsed out of hostapd.conf, since it's the same kind
+# of "two places, must agree" constraint PROVISION_PORT already has with
+# nftables-rules.sh.
+TARGET_SSID = {
+    "sensor": os.environ.get("TARGET_SSID_SENSORS", "greennode-sensors"),
+    "actuator": os.environ.get("TARGET_SSID_ACTUATORS", "greennode-actuators"),
+}
+TARGET_PASSPHRASE = {
+    "sensor": os.environ.get("TARGET_PASSPHRASE_SENSORS", "CHANGE_ME_sensors_passphrase"),
+    "actuator": os.environ.get("TARGET_PASSPHRASE_ACTUATORS", "CHANGE_ME_actuators_passphrase"),
+}
+MQTT_GATEWAY_IP = {
+    "sensor": os.environ.get("MQTT_GATEWAY_IP_SENSORS", "10.0.10.1"),
+    "actuator": os.environ.get("MQTT_GATEWAY_IP_ACTUATORS", "10.0.11.1"),
+}
+SUBNET = {
+    "sensor": os.environ.get("SUBNET_SENSORS", "10.0.10.0/24"),
+    "actuator": os.environ.get("SUBNET_ACTUATORS", "10.0.11.0/24"),
+}
+IFACE = {"sensor": "wlan1", "actuator": "wlan1_1"}
+DEFAULT_TIER = {"sensor": "2", "actuator": "0"}
+DEFAULT_RATE_CEIL = {"sensor": ("256", "2048"), "actuator": ("512", "4096")}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -81,13 +132,17 @@ class PairingState:
         self.window_open_until = 0.0         # epoch seconds; 0 = closed
         self.seen_macs = {}                  # mac -> first_seen epoch, this window only
         self.claimed_macs = set()            # macs already handed off successfully
+        self.device_type = "sensor"          # chosen by the operator when opening the window
+        self.device_name = ""                # ditto — becomes the MQTT username / device_id
 
-    def open_window(self, seconds: int):
+    def open_window(self, seconds: int, device_type: str, name: str):
         with self.lock:
             self.window_open_until = time.time() + seconds
             self.seen_macs.clear()
             self.claimed_macs.clear()
-        log.info("Pairing window OPEN for %ds", seconds)
+            self.device_type = device_type if device_type in ("sensor", "actuator") else "sensor"
+            self.device_name = name
+        log.info("Pairing window OPEN for %ds (type=%s name=%s)", seconds, self.device_type, name)
 
     def close_window(self):
         with self.lock:
@@ -116,9 +171,19 @@ class PairingState:
                 and mac not in self.claimed_macs
             )
 
-    def mark_claimed(self, mac: str):
+    def claim_intent(self, mac: str) -> tuple[str, str] | None:
+        """Marks claimed and returns (device_type, name) atomically, so a
+        retried /provision request from the same device can't finalize
+        twice."""
         with self.lock:
-            self.claimed_macs.add(mac)
+            if (
+                time.time() < self.window_open_until
+                and mac in self.seen_macs
+                and mac not in self.claimed_macs
+            ):
+                self.claimed_macs.add(mac)
+                return (self.device_type, self.device_name)
+            return None
 
     def status(self) -> dict:
         with self.lock:
@@ -126,6 +191,8 @@ class PairingState:
             return {
                 "window_open": remaining > 0,
                 "seconds_remaining": remaining,
+                "device_type": self.device_type,
+                "device_name": self.device_name,
                 "seen_macs": list(self.seen_macs.keys()),
                 "claimed_macs": list(self.claimed_macs),
             }
@@ -199,32 +266,146 @@ def mac_for_ip(ip: str) -> str | None:
     return None
 
 
-# --- backend handoff -------------------------------------------------------
+# --- local finalize: IP allocation, registry, MQTT creds, edge DB --------
 
-def finalize_with_backend(mac: str, ip: str) -> dict | None:
-    """Calls the main backend's internal finalize route to actually create
-    the device record and get back real credentials. Returns None (stub
-    mode) if BACKEND_FINALIZE_URL isn't configured — the device is written
-    to pending-devices.txt for manual handling instead."""
-    if not BACKEND_FINALIZE_URL:
-        PENDING_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(PENDING_FILE, "a") as f:
-            f.write(f"{int(time.time())},{mac},{ip}\n")
-        log.info("STUB MODE: wrote pending device %s (%s) to %s — "
-                  "set BACKEND_FINALIZE_URL to auto-finalize instead", mac, ip, PENDING_FILE)
-        return None
+def allocate_ip(device_type: str) -> str:
+    """Next free IP in the target subnet, based on what's already in
+    devices.csv. .10-.200 range matches the dnsmasq dhcp-range for both
+    subnets — keep in sync if that range is ever changed."""
+    subnet = ipaddress.ip_network(SUBNET[device_type])
+    used = set()
+    if DEVICES_CSV.exists():
+        with open(DEVICES_CSV) as f:
+            for row in csv.reader(f):
+                if row and not row[0].startswith("#") and row[0] != "mac" and len(row) > 1:
+                    used.add(row[1])
+    for host in subnet.hosts():
+        candidate = str(host)
+        last_octet = int(candidate.split(".")[-1])
+        if 10 <= last_octet <= 200 and candidate not in used:
+            return candidate
+    raise RuntimeError(f"No free IP left in {subnet}")
 
-    payload = json.dumps({"mac": mac, "ip": ip}).encode()
-    req = urllib.request.Request(
-        BACKEND_FINALIZE_URL, data=payload,
-        headers={"Content-Type": "application/json"}, method="POST",
+
+def append_to_registry(mac: str, ip: str, device_type: str, name: str):
+    iface = IFACE[device_type]
+    tier = DEFAULT_TIER[device_type]
+    rate_kbit, ceil_kbit = DEFAULT_RATE_CEIL[device_type]
+    with open(DEVICES_CSV, "a", newline="") as f:
+        csv.writer(f).writerow([mac, ip, iface, tier, rate_kbit, ceil_kbit, name])
+    log.info("Appended to registry: %s (%s, %s) on %s", name, mac, ip, iface)
+
+
+def generate_mqtt_credentials(device_id: str, device_type: str) -> str:
+    """Adds/updates one Mosquitto user + appends its ACL entry, then
+    reloads the broker. Uses subprocess for mosquitto_passwd rather than
+    touching the password file's hash format directly."""
+    password = secrets.token_urlsafe(18)
+
+    subprocess.run(
+        ["mosquitto_passwd", "-b", MOSQUITTO_PASSWD_FILE, device_id, password],
+        check=True,
     )
+
+    with open(MOSQUITTO_ACL_FILE, "a") as f:
+        f.write(f"\nuser {device_id}\n")
+        if device_type == "actuator":
+            f.write(f"topic write greennode/{device_id}/status\n")
+            f.write(f"topic read greennode/{device_id}/cmd\n")
+        else:
+            f.write(f"topic write greennode/{device_id}/data\n")
+            f.write(f"topic write greennode/{device_id}/status\n")
+
+    subprocess.run(["systemctl", "reload", "mosquitto"], check=True)
+    log.info("Generated MQTT credentials for %s and reloaded mosquitto", device_id)
+    return password
+
+
+def regenerate_network_configs():
+    """Re-applies the same dnsmasq reservation + HTB class generation a
+    human would run by hand after editing devices.csv — see
+    HARDWARE_SETUP.md Part 4. Runs both scripts fresh so the new device's
+    reservation/class exist without restarting anything that would
+    disrupt already-connected devices (dnsmasq restart is brief; existing
+    DHCP leases aren't lost)."""
+    subprocess.run(["bash", str(GEN_DHCP_SCRIPT)], check=True)
+    subprocess.run(["systemctl", "restart", "dnsmasq"], check=True)
+    subprocess.run(["bash", str(GEN_TC_SCRIPT)], check=True)
+    log.info("Regenerated dnsmasq reservations and HTB classes")
+
+
+def insert_connected_device(device_id: str, device_type: str, mac: str):
+    """Direct sqlite3, not SQLAlchemy — pairing_watcher.py stays
+    stdlib-only by design (see module docstring), so it can run
+    independently of whatever ORM/framework the main edge app uses.
+    Column shape matches edge/models.py's ConnectedDevice — reconcile
+    both against the real schema together if either changes."""
+    conn = sqlite3.connect(EDGE_DB_PATH)
     try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            return json.loads(resp.read())
-    except Exception as e:
-        log.error("Backend finalize call failed for %s: %s", mac, e)
+        conn.execute(
+            "INSERT INTO connected_devices (device_id, device_type, name, revoked, registered_ts) "
+            "VALUES (?, ?, ?, 0, ?)",
+            (device_id, device_type, device_id, int(time.time())),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    log.info("Inserted connected_devices row for %s", device_id)
+
+
+def sync_to_cloud_async(device_id: str, device_type: str, mac: str, ip: str):
+    """Best-effort only — runs in a background thread, never blocks or
+    fails provisioning. If BACKEND_FINALIZE_URL is unset or unreachable,
+    the device is already fully functional locally; this is purely for
+    the cloud-side copy of the device registry to catch up whenever
+    connectivity allows."""
+    if not BACKEND_FINALIZE_URL:
+        return
+
+    def _post():
+        payload = json.dumps({
+            "device_id": device_id, "device_type": device_type,
+            "mac": mac, "ip": ip,
+        }).encode()
+        req = urllib.request.Request(
+            BACKEND_FINALIZE_URL, data=payload,
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        try:
+            urllib.request.urlopen(req, timeout=5)
+            log.info("Cloud sync notified for %s", device_id)
+        except Exception as e:
+            log.warning("Cloud sync notification failed for %s (device still fully "
+                        "functional locally): %s", device_id, e)
+
+    threading.Thread(target=_post, daemon=True).start()
+
+
+def finalize_locally(mac: str, ip: str) -> dict | None:
+    """The whole local provisioning sequence. Returns the credential
+    payload to hand back to the ESP32, or None if this MAC wasn't
+    claimable (window closed / already claimed / never seen)."""
+    intent = state.claim_intent(mac)
+    if intent is None:
         return None
+    device_type, device_id = intent
+
+    target_ip = allocate_ip(device_type)
+    append_to_registry(mac, target_ip, device_type, device_id)
+    mqtt_password = generate_mqtt_credentials(device_id, device_type)
+    regenerate_network_configs()
+    insert_connected_device(device_id, device_type, mac)
+    sync_to_cloud_async(device_id, device_type, mac, target_ip)
+
+    return {
+        "device_id": device_id,
+        "target_ssid": TARGET_SSID[device_type],
+        "target_passphrase": TARGET_PASSPHRASE[device_type],
+        "mqtt_host": MQTT_GATEWAY_IP[device_type],
+        "mqtt_port": 1883,
+        "mqtt_user": device_id,
+        "mqtt_pass": mqtt_password,
+    }
 
 
 # --- HTTP: public provisioning endpoint (ESP32-facing) --------------------
@@ -256,14 +437,21 @@ class ProvisionHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"no open pairing window for this device")
             return
 
-        creds = finalize_with_backend(mac, client_ip)
-        if creds is None:
-            self.send_response(202)  # accepted, pending manual handling
+        try:
+            creds = finalize_locally(mac, client_ip)
+        except Exception:
+            log.exception("Local finalize failed for %s (%s)", mac, client_ip)
+            self.send_response(500)
             self.end_headers()
-            self.wfile.write(b"pending operator confirmation")
+            self.wfile.write(b"provisioning failed, check greennode-pairing-watcher logs")
             return
 
-        state.mark_claimed(mac)
+        if creds is None:
+            self.send_response(403)
+            self.end_headers()
+            self.wfile.write(b"no open pairing window for this device")
+            return
+
         body = json.dumps(creds).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -294,10 +482,18 @@ class ControlHandler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(length) if length else b"{}"
             try:
-                seconds = json.loads(body).get("seconds", DEFAULT_WINDOW_SECONDS)
+                parsed = json.loads(body)
             except json.JSONDecodeError:
-                seconds = DEFAULT_WINDOW_SECONDS
-            state.open_window(int(seconds))
+                parsed = {}
+            seconds = int(parsed.get("seconds", DEFAULT_WINDOW_SECONDS))
+            device_type = parsed.get("device_type", "sensor")
+            name = parsed.get("name", "")
+            if not name:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b'{"error": "name is required"}')
+                return
+            state.open_window(seconds, device_type, name)
             self.send_response(200)
             self.end_headers()
         elif self.path == "/pairing/close":
