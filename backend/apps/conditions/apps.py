@@ -1,5 +1,5 @@
 from django.apps import AppConfig
 
 
-class CommandsConfig(AppConfig):
-    name = 'apps.commands'
+class ConditionsConfig(AppConfig):
+    name = 'apps.conditions'
