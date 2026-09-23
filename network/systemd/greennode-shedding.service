@@ -1,0 +1,14 @@
+[Unit]
+Description=GreenNode adaptive bandwidth shedding daemon
+After=network.target hostapd.service dnsmasq.service
+Requires=hostapd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/greennode-network/scripts/shedding_daemon.py
+Restart=on-failure
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
