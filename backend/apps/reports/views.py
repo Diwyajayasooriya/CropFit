@@ -93,3 +93,49 @@ class ReportSummaryView(APIView):
                 "active_actuators": active_actuators,
             }
         }, status=status.HTTP_200_OK)
+
+
+class DashboardSummaryView(APIView):
+    """
+    GET /api/v1/reports/dashboard/
+    Combines latest metrics and actuator states for the frontend dashboard.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        # 1. Get latest readings for tiles
+        latest_readings = ConditionReading.objects.order_by('-reading_ts')[:5]
+        tiles = []
+        for r in latest_readings:
+            tiles.append({
+                "sensor_id": f"SN-{r.id}",
+                "label": "Temperature" if r.temperature else "Humidity",
+                "value": float(r.temperature or r.humidity or 0),
+                "unit": "°C" if r.temperature else "%",
+                "kind": "temperature" if r.temperature else "humidity",
+                "updated_at": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(r.reading_ts))
+            })
+
+        # 2. Get actuators
+        actuators_qs = Device.objects.filter(device_type='actuator')
+        actuators = [{
+            "actuator_id": a.device_id,
+            "name": a.name,
+            "is_active": a.is_online, # Mapping online status to active for simplicity
+            "kind": "relay"
+        } for a in actuators_qs]
+
+        # 3. Overall status
+        active_alerts = Alert.objects.filter(is_resolved=False).count()
+        status_msg = "System Healthy. All conditions within optimal range."
+        overall_status = "healthy"
+        if active_alerts > 0:
+            status_msg = f"System Warning. {active_alerts} active alerts detected."
+            overall_status = "warning"
+
+        return Response({
+            "message": status_msg,
+            "overall_status": overall_status,
+            "tiles": tiles,
+            "actuators": actuators
+        })

@@ -1,13 +1,15 @@
 import logging
 from contextlib import asynccontextmanager
 
+from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.config import settings
-from api.database import engine
+from api.database import SessionLocal, engine
 from api.routers import actuators, devices, rules, sensors, status, sync
 from api.services.mqtt_publisher import mqtt_publisher
+from api.services.sync_service import sync_service
 from models import Base
 
 # Configure logging
@@ -18,6 +20,17 @@ logging.basicConfig(
 log = logging.getLogger("edge.main")
 
 
+def run_sync_job():
+    """Wrapper to run the sync service in a background job."""
+    db = SessionLocal()
+    try:
+        sync_service.sync_batch(db)
+    except Exception as e:
+        log.error("Scheduled sync job failed: %s", e)
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- Startup ---
@@ -26,13 +39,27 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     # Connect to local Mosquitto MQTT broker
     mqtt_publisher.start()
-    log.info("Edge Gateway API initialized successfully.")
+
+    # Start APScheduler for background tasks
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(
+        run_sync_job,
+        "interval",
+        seconds=settings.SYNC_INTERVAL_SECONDS,
+        id="cloud_sync",
+        replace_existing=True
+    )
+    scheduler.start()
+    app.state.scheduler = scheduler
+    log.info("Edge Gateway API and Scheduler initialized successfully.")
 
     yield
 
     # --- Shutdown ---
     log.info("Shutting down GreenNode Edge Gateway API...")
     mqtt_publisher.stop()
+    if hasattr(app.state, "scheduler"):
+        app.state.scheduler.shutdown()
     log.info("Edge Gateway API stopped.")
 
 
