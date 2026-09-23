@@ -15,7 +15,7 @@ The split exists because control-loop decisions have to keep working even when t
                     │                                           │
                     │  user_authentication                      │
                     │  nodes                                    │
-                    │  node_background_history (crop/season)    │
+                    │  node_background_history (crop/stage)     │
                     │  conditions   (hypertable, ML training)   │
                     │  actions_log_cloud (synced action audit)  │
                     │  rules        (derived from conditions)   │
@@ -68,16 +68,18 @@ Registry of every physical GreenNode hub deployed across all users.
 | installed_at | timestamp | |
 
 ### `node_background_history`
-What's actually growing in a given hub, and when — kept as history rather than a static field on `nodes`, because a farmer replanting mid-season would otherwise silently reattribute every past `conditions` row to the new crop. Each row is a window; the current background is whichever row has `ended_at IS NULL`.
+What's actually growing in a given hub, and at what stage — kept as history rather than a static field on `nodes`, because both a replant and a stage transition would otherwise silently reattribute every past `conditions` row to the new background. Each row is a window; the current background is whichever row has `ended_at IS NULL`.
+
+Calendar season was dropped from this table — these are controlled-environment greenhouses, so outdoor seasonal convention doesn't drive thresholds the way growth stage does. A seedling and a fruiting plant of the same crop need different thresholds regardless of time of year; that's the axis that actually matters here.
 
 | Field | Type | Notes |
 |---|---|---|
 | history_id | bigserial, PK | |
 | node_id | uuid, FK → nodes | |
 | crop_type | string | what's growing — this is the field the training/pooling logic joins against, not `nodes.node_type` |
-| season_label | string | e.g. `2026-maha`, `2026-yala` — whatever seasonal convention the platform uses |
-| started_at | timestamp | when this crop/season began on this hub |
-| ended_at | timestamp, nullable | null = still active; set when the farmer replants or the season changes |
+| growth_stage | string | e.g. `seeding`, `vegetative`, `flowering`, `picking` — whatever stage vocabulary the platform settles on per crop |
+| started_at | timestamp | when this crop/stage began on this hub |
+| ended_at | timestamp, nullable | null = still active; set when the farmer replants or the plant moves to its next stage |
 
 ### `conditions` (TimescaleDB hypertable, partitioned by time)
 The large greenhouse-conditions dataset used for ML. This is an aggregate/append-only log fed by every hub's `condition_db`.
@@ -100,7 +102,7 @@ Rules mined from `conditions` (see §5). Most rules are fleet-wide — defined p
 | rule_id | uuid, PK | |
 | node_id | uuid, FK → nodes, nullable | null = fleet-wide rule; set = personalized to this one hub |
 | scope | string | `fleet` \| `node` — makes the `node_id` nullability explicit and gives the retraining job a clean way to find "the personalized rule for this hub" without inferring it from nullability alone |
-| crop_type / node_type | string | what context the rule applies to |
+| crop_type / growth_stage / node_type | string | what context the rule applies to — matched against `node_background_history` for the crop/stage part |
 | condition | json | e.g. `{"temperature": {"op": ">", "value": 32}}` |
 | action | json | e.g. `{"device_type": "fan", "command": "on"}` |
 | priority | int | resolves conflicts when multiple rules fire — a personalized (`scope = node`) rule should be given higher priority than the fleet default it overrides |
@@ -138,12 +140,12 @@ Synced copy of each hub's edge `actions_log`. This replaces `conditions.action_t
 
 ## 1. How the database and the ML pipeline relate
 
-The ML model (a decision tree, per the design document) doesn't train on a separate dataset — it trains directly on `conditions`, joined against `node_background_history` (for crop/season context) and `actions_log_cloud` (for the label). That's the core design decision to understand before touching SQL:
+The ML model (a decision tree, per the design document) doesn't train on a separate dataset — it trains directly on `conditions`, joined against `node_background_history` (for crop/growth-stage context) and `actions_log_cloud` (for the label). That's the core design decision to understand before touching SQL:
 
 ```
 sensor readings  ─────►  conditions (hypertable)  ───┐
                                                        │
-node_background_history (crop/season) ────────────────┼─────►  training query
+node_background_history (crop/stage) ──────────────────┼─────►  training query
                                                        │
 actions_log_cloud (triggered_by='manual') ────────────┘
                                                                 │
@@ -190,7 +192,7 @@ CREATE TABLE conditions (
 For this to be trainable data rather than just a log, two things matter more than the rest:
 
 - **The join to `actions_log_cloud`** (via `condition_reading_id`) is what makes each row a supervised-learning example rather than a plain sensor log — and specifically, filtering that join to `triggered_by = 'manual'` is what makes it an example of *farmer* judgment rather than the system re-confirming its own prior rule firings. A reading with no matching action row is unlabeled and gets excluded, same as before.
-- **`node_id`** lets you train per-hub or per-crop-type models by joining to `node_background_history` for the crop/season that was active at `ts` (not `nodes.node_type`, which is hardware only — see §2 above), rather than lumping every greenhouse together.
+- **`node_id`** lets you train per-hub or per-crop/stage models by joining to `node_background_history` for whichever crop and growth stage was active at `ts` (not `nodes.node_type`, which is hardware only — see §2 above), rather than lumping every greenhouse together.
 
 > **Note:** `PRIMARY KEY (reading_id, ts)` — not `reading_id` alone — is a TimescaleDB requirement, not a stylistic choice: any unique or primary key on a hypertable must include the partitioning column (`ts`). Leaving `ts` out of the key will fail when you run `create_hypertable`.
 
@@ -202,6 +204,7 @@ CREATE TABLE rules (
     node_id       UUID REFERENCES nodes(node_id),  -- nullable: null = fleet-wide, set = personalized
     scope         TEXT NOT NULL DEFAULT 'fleet',    -- 'fleet' | 'node'
     crop_type     TEXT,
+    growth_stage  TEXT,
     node_type     TEXT,
     condition     JSONB NOT NULL,   -- e.g. {"temperature": {"op": ">", "value": 32}}
     action        JSONB NOT NULL,   -- e.g. {"device_type": "fan", "command": "on"}
@@ -213,7 +216,7 @@ CREATE TABLE rules (
 );
 ```
 
-This is a plain (non-hypertable) table — it's small, low-write-volume, and doesn't need time-partitioning. `model_version` + `status` together are what let you retrain repeatedly without losing history: a new training run inserts new `draft` rows under a new `model_version` and marks the rules it replaces `deprecated`, rather than overwriting anything. `node_id` + `scope` let the same mechanism produce two tiers of rule from two different training runs — a fleet-wide run (grouped by crop/season, no `node_id`) and, once a hub has enough of its own history, a personalized run scoped to that one `node_id` — without needing a second table.
+This is a plain (non-hypertable) table — it's small, low-write-volume, and doesn't need time-partitioning. `model_version` + `status` together are what let you retrain repeatedly without losing history: a new training run inserts new `draft` rows under a new `model_version` and marks the rules it replaces `deprecated`, rather than overwriting anything. `node_id` + `scope` let the same mechanism produce two tiers of rule from two different training runs — a fleet-wide run (grouped by crop/growth-stage, no `node_id`) and, once a hub has enough of its own history, a personalized run scoped to that one `node_id` — without needing a second table.
 
 ### 2.3 `actions_log_cloud` — the label
 
@@ -325,7 +328,7 @@ This automatically drops chunks older than the interval. **Be careful with this 
 
 ## 4. The training query itself
 
-This is the SQL the training job runs to pull a labelled dataset for one crop type before handing it to scikit-learn. Two changes from the earlier version: it joins `node_background_history` for crop type instead of misusing `nodes.node_type` (which is hardware, not crop), and it joins `actions_log_cloud` filtered to `triggered_by = 'manual'` instead of reading `conditions.action_taken`, so the label reflects farmer judgment rather than the system's own past decisions.
+This is the SQL the training job runs to pull a labelled dataset for one crop type and growth stage before handing it to scikit-learn. Three changes from the earlier version: it joins `node_background_history` for crop type *and* growth stage instead of misusing `nodes.node_type` (which is hardware, not crop) or a calendar season (which doesn't drive thresholds in a controlled environment); and it joins `actions_log_cloud` filtered to `triggered_by = 'manual'` instead of reading `conditions.action_taken`, so the label reflects farmer judgment rather than the system's own past decisions.
 
 ```sql
 SELECT
@@ -344,26 +347,28 @@ JOIN node_background_history bg
 JOIN actions_log_cloud a
     ON a.condition_reading_id = c.reading_id
 WHERE bg.crop_type = 'tomato'
+  AND bg.growth_stage = 'flowering'
   AND a.triggered_by = 'manual'
   AND c.ts >= now() - INTERVAL '90 days';
 ```
 
-For the **fleet-wide** run this is the whole query — it pools every hub currently growing that crop. A **personalized** run for one hub adds `AND c.node_id = :node_id` and writes its output rows with that `node_id` and `scope = 'node'` set on `rules`, rather than leaving them fleet-wide.
+For the **fleet-wide** run this is the whole query — it pools every hub currently growing that crop at that stage. A **personalized** run for one hub adds `AND c.node_id = :node_id` and writes its output rows with that `node_id` and `scope = 'node'` set on `rules`, rather than leaving them fleet-wide.
 
 Feed this into the training script:
 
 ```python
 from sklearn.tree import DecisionTreeClassifier
 
-def train_rules_for(crop_type: str, db_session, node_id: str | None = None):
-    # node_id=None -> fleet-wide run, pooled across every hub growing crop_type
+def train_rules_for(crop_type: str, growth_stage: str, db_session, node_id: str | None = None):
+    # node_id=None -> fleet-wide run, pooled across every hub growing crop_type at this stage
     # node_id set  -> personalized run, scoped to that one hub's own history
-    X, y = load_training_data(db_session, crop_type, node_id)   # runs the query above
+    X, y = load_training_data(db_session, crop_type, growth_stage, node_id)   # runs the query above
     clf = DecisionTreeClassifier(max_depth=4, min_samples_leaf=20)
     clf.fit(X, y)
     for leaf_condition, leaf_action, support, confidence in extract_leaves(clf, X, y):
         db_session.add(models.Rule(
             crop_type=crop_type,
+            growth_stage=growth_stage,
             node_id=node_id,
             scope="node" if node_id else "fleet",
             condition=leaf_condition,
@@ -387,7 +392,7 @@ def train_rules_for(crop_type: str, db_session, node_id: str | None = None):
 2. `create_hypertable` chunks `conditions` by time so writes stay fast as data accumulates; `actions_log` syncs to `actions_log_cloud` on the same batch pattern.
 3. Older chunks get compressed on a schedule, keeping storage down without deleting anything.
 4. (Optional) continuous aggregates pre-compute rolled-up features if the model needs them.
-5. A scheduled job queries `conditions` (joined to `node_background_history` for crop/season, and to `actions_log_cloud` filtered to `triggered_by = 'manual'` for the label) as labelled training data, fits a decision tree, and writes the result into `rules` as new `draft` rows tied to a `model_version` — fleet-wide by default, or scoped to one `node_id` for a personalized retrain.
+5. A scheduled job queries `conditions` (joined to `node_background_history` for crop type and growth stage, and to `actions_log_cloud` filtered to `triggered_by = 'manual'` for the label) as labelled training data, fits a decision tree, and writes the result into `rules` as new `draft` rows tied to a `model_version` — fleet-wide by default, or scoped to one `node_id` for a personalized retrain.
 6. Once reviewed/approved, `rules` rows flip to `active` and get linked to specific hubs via `node_rules`, which the hub then pulls down into its local `node_rules_cache` to run offline. A personalized rule's higher `priority` lets it override its fleet-wide counterpart on that one hub without disabling the rule anywhere else.
 
 This is the minimum you need to get the database and the ML pipeline talking to each other correctly. Retention policies and continuous aggregates (§3, Steps 5–6) are refinements to add once the pilot is generating real data volume — they're not required to get a first training run working.
@@ -504,7 +509,7 @@ Every action taken in response to a condition — automated **or manual** — wi
 | `node_rules` → `node_rules_cache` | periodic pull | The hub polls (or gets pushed) its active rule set from the cloud into a local cache, so rule evaluation never depends on the hub being online at decision time. |
 | `conditions` (edge) → `actions_log` | 1:N, nullable | Every automated action links back to the exact reading that triggered it via `condition_id`, so any action is traceable to its cause. Manual overrides leave this null and use `triggered_by = 'manual'` with `source_ref` identifying who acted. |
 | `connected_devices` → `actions_log` | 1:N | Every action is attributed to the specific actuator that received the command. |
-| `nodes` → `node_background_history` | 1:N | A hub's crop/season changes over its lifetime (replanting, season rollover); kept as a history of windows rather than overwritten, so past `conditions` rows stay correctly attributed to whatever was actually growing when they were recorded. |
+| `nodes` → `node_background_history` | 1:N | A hub's crop and growth stage change over its lifetime (replanting, stage transitions); kept as a history of windows rather than overwritten, so past `conditions` rows stay correctly attributed to whatever was actually growing — and at what stage — when they were recorded. |
 | `nodes` → `rules` | 1:N, nullable | Most rules are fleet-wide (`node_id` null); a rule with `node_id` set is a personalized override for that one hub, installed via `node_rules` at higher `priority` than the fleet default it supersedes. |
 | `actions_log` (edge) → `actions_log_cloud` | batch sync, not FK | Same sync pattern as `conditions_edge` → `conditions`, keyed by `(node_uid, local_id)`. This is what makes `triggered_by` available cloud-side for training. |
 | `conditions` (cloud) → `actions_log_cloud` | 1:N, nullable | Mirrors the edge-side relationship: an automated action links back to the reading that triggered it; manual overrides leave this null. |
