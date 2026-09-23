@@ -1,0 +1,60 @@
+{
+  "_comment": "Stage 1 agronomic priors (eggplant/brinjal, greenhouse). Sources: README_EGGPLANT.md. Several fields are estimates flagged LOW confidence where no dedicated eggplant study was found (RH band, CO2, DLI) -- see confidence notes before using in production without field validation.",
+  "crop": "eggplant",
+  "air_temp": {
+    "heat_trigger": 16.0,
+    "heat_target": 20.0,
+    "opt_min": 21.0,
+    "opt_max": 29.0,
+    "cool_trigger": 30.0,
+    "cool_target": 27.0,
+    "critical_high": 35.0
+  },
+  "soil_temp": { "heat_trigger": 16.0, "heat_target": 20.0 },
+  "rh": {
+    "_comment": "No dedicated growing-stage RH study found for eggplant -- LOW confidence, reasoned from Solanaceae family similarity to tomato pending field validation.",
+    "low_trigger": 60.0,
+    "low_target": 75.0,
+    "opt_min": 65.0,
+    "opt_max": 85.0,
+    "high_trigger": 85.0,
+    "high_target": 78.0,
+    "disease_risk": 95.0
+  },
+  "soil_moisture": {
+    "_comment": "Capacitive sensor %, calibrated 0 = bone dry, 100 = saturated. Estimate: Karam et al. 2011 found even 80% of field capacity cut yield 12%, so nudged higher than all three other crops -- needs field calibration, source used a weight-based FC scale, not the capacitive scale here.",
+    "low_trigger": 65.0,
+    "critical_low": 45.0,
+    "target": 85.0,
+    "waterlogged": 90.0
+  },
+  "co2": {
+    "_comment": "No eggplant-specific enrichment study found -- carried over from the general tomato/cucumber/capsicum convergence, LOW-MEDIUM confidence.",
+    "ambient_min": 340.0,
+    "enrich_trigger": 700.0,
+    "enrich_target": 850.0,
+    "safety_high": 1500.0
+  },
+  "light": {
+    "_comment": "No total-DLI target found -- Terlizzese et al. 2025 tested only SUPPLEMENTAL DLI (8.64 mol/m2/day on top of natural light), not a total daily target, so this figure is a conservative carryover from tomato, not eggplant-specific. LOW confidence, verify against your sensor's calibration.",
+    "dli_min_mj": 8.5,
+    "supplement_window_start_hour": 16,
+    "supplement_window_end_hour": 18
+  },
+  "actuator_rates": {
+    "_comment": "Unchanged from the tomato profile -- these describe fan/heater/mister hardware, not the crop.",
+    "fan_cool_c_per_min": { "LOW": 0.2, "MEDIUM": 0.4, "HIGH": 0.7 },
+    "heater_c_per_min": 0.25,
+    "soil_heater_c_per_min": 0.1,
+    "mister_rh_per_min": 1.5,
+    "dehumidify_rh_per_min": 0.8,
+    "irrigation_pct_per_min": 1.2,
+    "co2_ppm_per_min": 25.0,
+    "grow_light_mj_per_hour": 0.5
+  },
+  "limits": {
+    "fan_max_min": 60, "heater_max_min": 90, "mister_max_min": 30,
+    "irrigation_max_min": 45, "co2_max_min": 30, "lights_max_min": 240,
+    "round_to_min": 5
+  }
+}
