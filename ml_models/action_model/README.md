@@ -98,6 +98,42 @@ Full version with formulas: [`docs/threshold_analysis_table.md`](docs/threshold_
 > To use 30 °C, change `air_temp.cool_trigger` to 30 and `cool_target` to 28 in
 > `config/thresholds.json` and re-run steps 5.2–5.5.
 
+Growth-stage temperature bands (tomato)
+ 
+Source: Shamshiri, R.R., Jones, J.W., Thorp, K.R., et al. "Review of optimum temperature,
+humidity, and vapour pressure deficit for microclimate evaluation and control in greenhouse
+cultivation of tomato: a review." *International Agrophysics*, 2018;32:287–302.
+([PDF](https://www.ars.usda.gov/ARSUserFiles/20200500/Pubs%202018/Shamshiri2018%20-%20review%20optimum%20microclimate%20greenhouse.pdf))
+ 
+This is a peer-reviewed synthesis of multiple primary studies (cited authors in parentheses
+below are the original studies the review is drawing on), and it defines five growth stages for
+tomato.
+ 
+| Stage | Duration (approx.) | Temperature guidance reported |
+|---|---|---|
+| Germination | 25–35 days | ~25°C optimal; seedling growth wants night min 18°C, day max 27°C (Van Ploeg & Heuvelink, 2005) |
+| Seedling growth | (within above) | 16–18.5°C reported by one source (Jones, 2013) — note this conflicts with the 25°C/18–27°C figures above; the review itself doesn't fully reconcile them |
+| Vegetative | 20–25 days | 18.5–26.5°C general band; day 21–29.5°C / night 18.5–21°C (Jones, 2013) |
+| Flowering | 20–30 days | same general band as vegetative in this review |
+| Early + mature fruiting | 20–30 / 15–20 days | fruit set/development optimal 22–26°C; **fruit set fails above 32°C** (Adams et al., 2001) |
+
+ 
+### Gap 4 — Vapor Pressure Deficit (VPD)
+ 
+Same source (Shamshiri et al., 2018) plus corroborating figures from other sources it cites:
+ 
+- **Formula:** VPD (kPa) = SVP(T) × (1 − RH/100), where
+  SVP(T) = exp(6.41 + 0.0727·T − 3×10⁻⁴·T² + 1.18×10⁻⁶·T³ − 3.86×10⁻⁹·T⁴), T in °C.
+- **Optimal range cited:** 0.5–0.8 kPa "for most greenhouse crops" (Barker, 1990, as cited in
+  Shamshiri et al.); a nearby source in the same review gives 0.4–0.79 kPa (OMAFRA, 2005) and
+  another gives a wider 0.47–1.27 kPa. Treat 0.5–0.8 kPa as the central estimate, with the wider
+  figures as the tolerance band different authors accept.
+**What this means for the model:** `greennode_rules.featurize()` already computes both `air_temp`
+and distance-from-RH-threshold as separate features — VPD could be added as one more derived
+feature (computed from the two existing readings, no new sensor needed) using the formula above,
+and a VPD band (0.5–0.8 kPa optimal, tightening the fallback rule around it) could sit alongside
+the existing temp/RH triggers in `expert_policy()`. This is a low-cost addition since both inputs
+are already sensed.
 ---
 
 ## 4. Test scenario table (expected actions)
