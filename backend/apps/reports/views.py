@@ -10,12 +10,14 @@ from apps.devices.models import Device
 from apps.greenhouses.models.models import GreenHouse
 
 
+from apps.authentication.Permitions.permissions import IsFarmer
+
 class ReportSummaryView(APIView):
     """
     GET /api/v1/reports/summary/?greenhouse=<id>&hours=24
     Aggregates environmental conditions, active alerts, and fleet status using SQL aggregations.
     """
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [IsFarmer]
 
     def get(self, request):
         greenhouse_id = request.query_params.get('greenhouse')
@@ -100,7 +102,7 @@ class DashboardSummaryView(APIView):
     GET /api/v1/reports/dashboard/
     Combines latest metrics and actuator states for the frontend dashboard.
     """
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [IsFarmer]
 
     def get(self, request):
         # 1. Get latest readings for tiles

@@ -29,6 +29,12 @@ export default function DashboardPage() {
   }, [fetchDashboard]);
 
   const handleToggleActuator = (id: string, name: string, currentState: boolean) => {
+    // Restricted action for Farmer
+    if (user?.role === 'farmer') {
+      toast.error('Farmers do not have permission to manually override actuators.', 'Access Denied');
+      return;
+    }
+
     const nextState = !currentState;
     updateActuator(id, nextState);
     if (nextState) {
@@ -67,6 +73,16 @@ export default function DashboardPage() {
         <div>
           <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
             Welcome back, {user?.first_name || 'Operator'}
+            {user?.role === 'admin' && (
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 uppercase">
+                Admin
+              </span>
+            )}
+            {user?.role === 'technician' && (
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 uppercase">
+                Technician
+              </span>
+            )}
           </h2>
           <p className="text-xs sm:text-sm text-slate-500">
             Greenhouse Zone A • Connected via ESP32 Edge Gateway

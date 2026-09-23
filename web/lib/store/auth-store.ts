@@ -37,7 +37,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
     try {
       // 1. Call Django simplejwt token endpoint
-      const tokens = await api<AuthTokens>('/token/', {
+      const tokens = await api<AuthTokens>('/auth/token/', {
         method: 'POST',
         body: credentials,
         auth: false,
@@ -45,8 +45,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
       setTokens(tokens);
 
-      // 2. Fetch user profile from DRF accounts/me
-      const user = await api<User>('/accounts/me/');
+      // 2. Fetch user profile from DRF auth/me
+      const user = await api<User>('/auth/me/');
       if (typeof window !== 'undefined') {
         localStorage.setItem('cropfit_user', JSON.stringify(user));
       }
