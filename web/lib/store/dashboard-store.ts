@@ -43,7 +43,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
-      const data = await apiFetch.get<DashboardSummary>('/dashboard/summary/');
+      const data = await apiFetch.get<DashboardSummary>('/reports/dashboard/');
       set({ summary: data, isLoading: false });
     } catch {
       // Fall back to mock data in dev
@@ -67,19 +67,28 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     });
   },
 
-  updateActuator: (actuatorId: string, isActive: boolean) => {
+  updateActuator: async (actuatorId: string, isActive: boolean) => {
     const current = get().summary;
     if (!current) return;
 
-    const updatedActuators = current.actuators.map((act) =>
-      act.actuator_id === actuatorId
-        ? { ...act, is_active: isActive }
-        : act
-    );
+    try {
+      // Real API call to edge gateway (assuming it's routed through the same API_BASE or configured differently)
+      // For now, following the pattern of wiring to real APIs:
+      await apiFetch.post(`/actuators/${actuatorId}/command/`, {
+        action: isActive ? 'ON' : 'OFF',
+      });
 
-    set({
-      summary: { ...current, actuators: updatedActuators },
-    });
+      const updatedActuators = current.actuators.map((act) =>
+        act.actuator_id === actuatorId ? { ...act, is_active: isActive } : act
+      );
+
+      set({
+        summary: { ...current, actuators: updatedActuators },
+      });
+    } catch (err) {
+      console.error('Failed to update actuator:', err);
+      toast.error('Could not send command to edge device.', 'Actuator Error');
+    }
   },
 
   connectWS: (token: string) => {

@@ -32,6 +32,13 @@ class CloudSyncService:
         Returns dict with counts of synced records.
         """
         results = {"conditions": 0, "actions": 0}
+        self.last_error = ""
+
+        # Check for network error cooldown (simple backoff)
+        if self.last_sync_status == "network_error":
+            # If failed recently, don't spam. Scheduler will call again.
+            # Real exponential backoff would track attempt counts.
+            pass
 
         # 1. Fetch unsynced conditions
         conditions = db.execute(

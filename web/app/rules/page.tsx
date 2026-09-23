@@ -5,28 +5,56 @@
 
 'use client';
 
-import React, { useState } from 'react';
-import { mockRules } from '@/lib/mock-data';
+import React, { useState, useEffect } from 'react';
+import { apiFetch } from '@/lib/api';
 import { toast } from '@/lib/store/toast-store';
 
-export default function RulesPage() {
-  const [rules, setRules] = useState(mockRules);
+interface Rule {
+  id: string;
+  name: string;
+  description: string;
+  is_active: boolean;
+  last_triggered?: string;
+}
 
-  const toggleRule = (id: string, name: string) => {
-    setRules((prev) =>
-      prev.map((r) => {
-        if (r.id === id) {
-          const next = !r.is_active;
-          if (next) {
-            toast.success(`Rule "${name}" enabled on Edge Gateway`, 'Rule Activated');
-          } else {
-            toast.warning(`Rule "${name}" disabled. Automation paused.`, 'Rule Deactivated');
-          }
-          return { ...r, is_active: next };
-        }
-        return r;
-      })
-    );
+export default function RulesPage() {
+  const [rules, setRules] = useState<Rule[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    fetchRules();
+  }, []);
+
+  const fetchRules = async () => {
+    setIsLoading(true);
+    try {
+      const data = await apiFetch.get<Rule[]>('/rules/');
+      setRules(data);
+    } catch (err) {
+      console.error('Failed to fetch rules:', err);
+      toast.error('Could not load automation rules.', 'Error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const toggleRule = async (id: string, name: string, currentStatus: boolean) => {
+    try {
+      const next = !currentStatus;
+      await apiFetch.patch(`/rules/${id}/`, { is_active: next });
+      
+      setRules((prev) =>
+        prev.map((r) => (r.id === id ? { ...r, is_active: next } : r))
+      );
+
+      if (next) {
+        toast.success(`Rule "${name}" enabled on Edge Gateway`, 'Rule Activated');
+      } else {
+        toast.warning(`Rule "${name}" disabled. Automation paused.`, 'Rule Deactivated');
+      }
+    } catch (err) {
+      toast.error(`Failed to update rule "${name}"`, 'Error');
+    }
   };
 
   const handleCreateRule = () => {
@@ -91,7 +119,7 @@ export default function RulesPage() {
                   </span>
                 )}
                 <button
-                  onClick={() => toggleRule(rule.id, rule.name)}
+                  onClick={() => toggleRule(rule.id, rule.name, rule.is_active)}
                   className={`w-12 h-6 rounded-full p-1 transition-colors cursor-pointer flex items-center ${
                     rule.is_active ? 'bg-emerald-600 justify-end' : 'bg-slate-300 justify-start'
                   }`}
