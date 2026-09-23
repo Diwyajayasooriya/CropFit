@@ -1,0 +1,58 @@
+{
+  "_comment": "Stage 1 agronomic priors (capsicum/bell pepper, greenhouse). Sources: README_CAPSICUM.md. Several fields disagree between sources (noted there) or are estimates where no figure matched CropFit's exact capacitive/DLI scale -- see confidence notes before using in production without field validation.",
+  "crop": "capsicum",
+  "air_temp": {
+    "heat_trigger": 15.0,
+    "heat_target": 20.0,
+    "opt_min": 20.0,
+    "opt_max": 25.0,
+    "cool_trigger": 28.0,
+    "cool_target": 25.0,
+    "critical_high": 32.0
+  },
+  "soil_temp": { "heat_trigger": 19.0, "heat_target": 20.0 },
+  "rh": {
+    "low_trigger": 60.0,
+    "low_target": 70.0,
+    "opt_min": 70.0,
+    "opt_max": 80.0,
+    "high_trigger": 80.0,
+    "high_target": 75.0,
+    "disease_risk": 90.0
+  },
+  "soil_moisture": {
+    "_comment": "Capacitive sensor %, calibrated 0 = bone dry, 100 = saturated. Estimate: nudged higher than tomato given Gramillo-Avila et al. 2024 found ~81.5% FC already cut yield 24-52% -- needs field calibration, source used a different (weight-based) moisture scale.",
+    "low_trigger": 60.0,
+    "critical_low": 45.0,
+    "target": 80.0,
+    "waterlogged": 90.0
+  },
+  "co2": {
+    "ambient_min": 340.0,
+    "enrich_trigger": 700.0,
+    "enrich_target": 900.0,
+    "safety_high": 1500.0
+  },
+  "light": {
+    "_comment": "dli_min_mj is an approximate conversion from mol/m2/day PAR figures (22.6-39.6 mol/m2/day, Adame-Adame et al. 2025) -- confidence LOW, verify against your sensor's calibration.",
+    "dli_min_mj": 10.0,
+    "supplement_window_start_hour": 16,
+    "supplement_window_end_hour": 18
+  },
+  "actuator_rates": {
+    "_comment": "Unchanged from the tomato profile -- these describe fan/heater/mister hardware, not the crop.",
+    "fan_cool_c_per_min": { "LOW": 0.2, "MEDIUM": 0.4, "HIGH": 0.7 },
+    "heater_c_per_min": 0.25,
+    "soil_heater_c_per_min": 0.1,
+    "mister_rh_per_min": 1.5,
+    "dehumidify_rh_per_min": 0.8,
+    "irrigation_pct_per_min": 1.2,
+    "co2_ppm_per_min": 25.0,
+    "grow_light_mj_per_hour": 0.5
+  },
+  "limits": {
+    "fan_max_min": 60, "heater_max_min": 90, "mister_max_min": 30,
+    "irrigation_max_min": 45, "co2_max_min": 30, "lights_max_min": 240,
+    "round_to_min": 5
+  }
+}
