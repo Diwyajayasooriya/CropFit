@@ -1,0 +1,15 @@
+[Unit]
+Description=GreenNode MQTT ingestion service (sensor data -> conditions table)
+After=network.target mosquitto.service
+Requires=mosquitto.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/greennode-edge
+ExecStart=/usr/bin/python3 /opt/greennode-edge/ingestion_service.py
+Restart=on-failure
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
