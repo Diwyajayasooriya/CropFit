@@ -7,6 +7,8 @@ from apps.rules.models import Rule
 from apps.rules.serializers import RuleSerializer
 
 
+from apps.authentication.Permitions.permissions import IsAdmin, IsFarmer
+
 class RuleViewSet(viewsets.ModelViewSet):
     """
     CRUD API for Automation Rules.
@@ -14,7 +16,11 @@ class RuleViewSet(viewsets.ModelViewSet):
     """
     queryset = Rule.objects.all().order_by('-created_at')
     serializer_class = RuleSerializer
-    permission_classes = [permissions.AllowAny]
+
+    def get_permissions(self):
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            return [IsAdmin()]
+        return [IsFarmer()]
 
     def get_queryset(self):
         qs = super().get_queryset()

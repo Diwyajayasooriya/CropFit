@@ -52,3 +52,10 @@
 - [ ] Compound conditions support
 - [ ] actions_log writes
 - [ ] Conflict detection
+
+## Priority 8: Role-Based Access Control & Dashboard (Completed)
+- [x] Dynamic dashboard components based on user role (Admin/Tech/Farmer)
+- [x] Secure backend endpoints with custom role permissions
+- [x] Restricted manual actuator overrides for Farmer role
+- [x] Role-based rule management (View only for Farmers, Full access for Tech/Admin)
+- [x] Integrated role badges in UI

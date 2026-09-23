@@ -9,13 +9,19 @@ from apps.node.serializers import NodeSerializer, SensorSerializer, ActuatorSeri
 from apps.node.sensor.sensorServices.postSensorData import PostSensorData
 
 
+from apps.authentication.Permitions.permissions import IsAdmin, IsFarmer, IsTechnician
+
 class NodeViewSet(viewsets.ModelViewSet):
     """
     CRUD API for Greenhouse Nodes (Raspberry Pi hubs / Gateways).
     """
     queryset = Node.objects.all().order_by('-created_at')
     serializer_class = NodeSerializer
-    permission_classes = [permissions.AllowAny]
+
+    def get_permissions(self):
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            return [IsAdmin()]
+        return [IsFarmer()]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -42,10 +48,18 @@ class NodeViewSet(viewsets.ModelViewSet):
 class SensorViewSet(viewsets.ModelViewSet):
     queryset = Sensor.objects.all()
     serializer_class = SensorSerializer
-    permission_classes = [permissions.AllowAny]
+    
+    def get_permissions(self):
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            return [IsTechnician()]
+        return [IsFarmer()]
 
 
 class ActuatorViewSet(viewsets.ModelViewSet):
     queryset = Actuator.objects.all()
     serializer_class = ActuatorSerializer
-    permission_classes = [permissions.AllowAny]
+    
+    def get_permissions(self):
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            return [IsTechnician()]
+        return [IsFarmer()]

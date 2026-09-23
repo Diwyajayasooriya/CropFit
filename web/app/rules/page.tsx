@@ -8,6 +8,7 @@
 import React, { useState, useEffect } from 'react';
 import { apiFetch } from '@/lib/api';
 import { toast } from '@/lib/store/toast-store';
+import { useAuthStore } from '@/lib/store/auth-store';
 
 interface Rule {
   id: string;
@@ -20,6 +21,7 @@ interface Rule {
 export default function RulesPage() {
   const [rules, setRules] = useState<Rule[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const { user } = useAuthStore();
 
   useEffect(() => {
     fetchRules();
@@ -39,6 +41,11 @@ export default function RulesPage() {
   };
 
   const toggleRule = async (id: string, name: string, currentStatus: boolean) => {
+    if (user?.role === 'farmer') {
+      toast.error('Farmers cannot modify automation rules.', 'Access Denied');
+      return;
+    }
+
     try {
       const next = !currentStatus;
       await apiFetch.patch(`/rules/${id}/`, { is_active: next });
@@ -73,12 +80,14 @@ export default function RulesPage() {
           </p>
         </div>
 
-        <button
-          onClick={handleCreateRule}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition-all shadow-md shadow-emerald-600/20 cursor-pointer self-start sm:self-auto"
-        >
-          <span>+ Create Automation Rule</span>
-        </button>
+        {user?.role !== 'farmer' && (
+          <button
+            onClick={handleCreateRule}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition-all shadow-md shadow-emerald-600/20 cursor-pointer self-start sm:self-auto"
+          >
+            <span>+ Create Automation Rule</span>
+          </button>
+        )}
       </div>
 
       <div className="space-y-4">
