@@ -1,0 +1,26 @@
+[Unit]
+Description=GreenNode pairing watcher (device detection + provisioning handoff)
+After=network.target hostapd.service
+Requires=hostapd.service
+
+[Service]
+Type=simple
+# Required — must match config/hostapd/hostapd.conf's wpa_passphrase
+# values for each SSID exactly, or provisioned devices get handed a
+# passphrase that doesn't actually work.
+Environment=TARGET_PASSPHRASE_SENSORS=CHANGE_ME_sensors_passphrase
+Environment=TARGET_PASSPHRASE_ACTUATORS=CHANGE_ME_actuators_passphrase
+# Optional — path to the edge SQLite DB (connected_devices table must
+# already exist there via your Alembic migrations).
+Environment=EDGE_DB_PATH=/opt/greennode-edge/greennode.db
+# Optional — set once the main backend's cloud-sync notification route
+# exists. Unset is fine: provisioning is fully local either way, this is
+# best-effort only. See the docstring in scripts/pairing_watcher.py.
+# Environment=BACKEND_FINALIZE_URL=http://127.0.0.1:8000/internal/provision/sync-notify
+ExecStart=/usr/bin/python3 /opt/greennode-network/scripts/pairing_watcher.py
+Restart=on-failure
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
