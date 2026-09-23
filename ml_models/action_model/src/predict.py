@@ -12,6 +12,11 @@ CLI example (the 40 °C case):
     python src/predict.py --air_temp 40 --rh 78 --soil_moisture 65 --soil_temp 22 \
         --co2 750 --outside_temp 30 --hour 12 --dli_so_far 5
 
+CLI example, a non-tomato crop (pass the matching thresholds + models dir together):
+    python src/predict.py --thresholds config/thresholds_cucumber.json \
+        --models-dir models_cucumber --air_temp 32 --rh 55 --soil_moisture 50 \
+        --soil_temp 20 --co2 600 --outside_temp 28 --hour 13 --dli_so_far 6
+
 Safety: the rule engine stays the "safety fallback" (pitch deck slide 4). If the model
 ever says OFF while a CRITICAL rule (extreme heat, frost, dangerous CO2) says ON, the
 rule wins, and the response says so in `overridden_by_rules`.
@@ -20,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 
 import numpy as np
 
@@ -99,10 +105,21 @@ def main():
                 "outside_temp": 22, "hour": 10, "dli_so_far": 4}
     for k in READING_KEYS:
         ap.add_argument(f"--{k}", type=float, default=defaults[k])
+    ap.add_argument("--thresholds", default=None,
+                   help="Path to a thresholds JSON (e.g. config/thresholds_cucumber.json). "
+                        "Defaults to config/thresholds.json (tomato) when omitted. Must match "
+                        "whatever the model in --models-dir was trained on.")
+    ap.add_argument("--models-dir", default=str(ROOT / "models"),
+                   help="Directory holding greennode_action.onnx + model_meta.json for the crop "
+                        "being tested, e.g. models_cucumber.")
     args = ap.parse_args()
     r = {k: getattr(args, k) for k in READING_KEYS}
     r["hour"] = int(r["hour"])
-    out = ActionModel().recommend(r)
+    th = load_thresholds(args.thresholds) if args.thresholds else load_thresholds()
+    models_dir = Path(args.models_dir)
+    model = ActionModel(onnx_path=models_dir / "greennode_action.onnx",
+                        meta_path=models_dir / "model_meta.json")
+    out = model.recommend(r, th)
     print(json.dumps(out, indent=2, ensure_ascii=False))
 
 

@@ -14,12 +14,15 @@ One network, four output heads:
 Usage:
     python src/train_tf.py                   # train + export ONNX
     python src/train_tf.py --epochs 60 --tflite
-Outputs (models/):
+    python src/train_tf.py --data data/training_data_cucumber.csv \
+        --thresholds config/thresholds_cucumber.json --models-dir models_cucumber
+Outputs (models/, or --models-dir if given):
     greennode_action.keras, greennode_action.onnx, [greennode_action.tflite],
     model_meta.json, training_metrics.json
 """
 import argparse
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -27,8 +30,6 @@ import tensorflow as tf
 
 from greennode_rules import (ROOT, FEATURE_NAMES, SWITCH_ACTUATORS, DURATION_KEYS,
                              load_thresholds, featurize_frame)
-
-MODELS = ROOT / "models"
 DUR_CAPS = {"fan_min": "fan_max_min", "mister_min": "mister_max_min", "heater_min": "heater_max_min",
             "irrigation_min": "irrigation_max_min", "lights_min": "lights_max_min", "co2_min": "co2_max_min"}
 
@@ -108,10 +109,20 @@ def main():
     ap.add_argument("--batch", type=int, default=256)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--tflite", action="store_true", help="also export a .tflite model")
+    ap.add_argument("--thresholds", default=None,
+                   help="Path to a thresholds JSON (e.g. config/thresholds_cucumber.json). "
+                        "Defaults to config/thresholds.json when omitted. Must match whatever "
+                        "--thresholds was used to generate --data, or the threshold-distance "
+                        "features will be wrong.")
+    ap.add_argument("--models-dir", default=str(ROOT / "models"),
+                   help="Where to save the trained model. Use a separate directory per crop "
+                        "(e.g. models_cucumber) so training one crop doesn't overwrite another's "
+                        "deployed model.")
     args = ap.parse_args()
 
+    MODELS = Path(args.models_dir)
     tf.keras.utils.set_random_seed(args.seed)
-    base = load_thresholds()
+    base = load_thresholds(args.thresholds) if args.thresholds else load_thresholds()
     X, y, caps = load_xy(args.data, base)
 
     # 80 / 10 / 10 split
@@ -132,7 +143,7 @@ def main():
     for k, v in metrics.items():
         print(f"  {k:<32} {v:.3f}")
 
-    MODELS.mkdir(exist_ok=True)
+    MODELS.mkdir(parents=True, exist_ok=True)
     model.save(MODELS / "greennode_action.keras")
 
     # ---- ONNX export --------------------------------------------------------
@@ -140,13 +151,13 @@ def main():
     spec = (tf.TensorSpec((None, X.shape[1]), tf.float32, name="features"),)
     tf2onnx.convert.from_keras(model, input_signature=spec, opset=13,
                                output_path=str(MODELS / "greennode_action.onnx"))
-    print("Saved models/greennode_action.onnx")
+    print(f"Saved {MODELS / 'greennode_action.onnx'}")
 
     if args.tflite:
         conv = tf.lite.TFLiteConverter.from_keras_model(model)
         conv.optimizations = [tf.lite.Optimize.DEFAULT]
         (MODELS / "greennode_action.tflite").write_bytes(conv.convert())
-        print("Saved models/greennode_action.tflite")
+        print(f"Saved {MODELS / 'greennode_action.tflite'}")
 
     meta = {"feature_names": FEATURE_NAMES, "switch_actuators": SWITCH_ACTUATORS,
             "duration_keys": DURATION_KEYS, "duration_caps_min": caps.tolist(),
@@ -155,7 +166,7 @@ def main():
             "trained_on": args.data, "rows": int(len(X))}
     (MODELS / "model_meta.json").write_text(json.dumps(meta, indent=2))
     (MODELS / "training_metrics.json").write_text(json.dumps(metrics, indent=2))
-    print("Saved models/model_meta.json and models/training_metrics.json")
+    print(f"Saved {MODELS / 'model_meta.json'} and {MODELS / 'training_metrics.json'}")
 
 
 if __name__ == "__main__":
