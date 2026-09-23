@@ -11,11 +11,15 @@ AND every duration is within ±TOL minutes (default 5) of the expected value.
 Usage:
     python src/evaluate.py
     python src/evaluate.py --tol 5 --unseen 10000
+    python src/evaluate.py --thresholds config/thresholds_cucumber.json \
+        --scenarios data/test_scenarios_cucumber.csv --models-dir models_cucumber \
+        --report-out docs/evaluation_report_cucumber.md
 Output:
-    docs/evaluation_report.md  (commit this so the team can see the accuracy)
+    docs/evaluation_report.md  (or --report-out; commit this so the team can see the accuracy)
 """
 import argparse
 from datetime import date
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -45,12 +49,23 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tol", type=int, default=5)
     ap.add_argument("--unseen", type=int, default=10000)
+    ap.add_argument("--thresholds", default=None,
+                   help="Path to a thresholds JSON. Defaults to config/thresholds.json when "
+                        "omitted. Must match whatever the model in --models-dir was trained on.")
+    ap.add_argument("--scenarios", default=str(ROOT / "data" / "test_scenarios.csv"),
+                   help="Scenario CSV to check against, e.g. data/test_scenarios_cucumber.csv")
+    ap.add_argument("--models-dir", default=str(ROOT / "models"),
+                   help="Directory holding greennode_action.onnx + model_meta.json for the "
+                        "crop being evaluated.")
+    ap.add_argument("--report-out", default=str(ROOT / "docs" / "evaluation_report.md"))
     args = ap.parse_args()
-    th = load_thresholds()
-    model = ActionModel()
+    th = load_thresholds(args.thresholds) if args.thresholds else load_thresholds()
+    models_dir = Path(args.models_dir)
+    model = ActionModel(onnx_path=models_dir / "greennode_action.onnx",
+                        meta_path=models_dir / "model_meta.json")
 
     # ---------------- 1. scenario table ----------------
-    sc = pd.read_csv(ROOT / "data" / "test_scenarios.csv")
+    sc = pd.read_csv(args.scenarios)
     X = np.stack([featurize({k: (int(r[k]) if k == "hour" else r[k]) for k in READING_KEYS}, th)
                   for _, r in sc.iterrows()])
     fan, vent, sw, mins, _ = model.decode_batch(X)
@@ -94,7 +109,7 @@ def main():
 
     # ---------------- report ----------------
     md = [f"# Evaluation report — {date.today()}", "",
-          f"Model: `models/greennode_action.onnx` · tolerance for durations: ±{args.tol} min", "",
+          f"Model: `{models_dir / 'greennode_action.onnx'}` · tolerance for durations: ±{args.tol} min", "",
           "## 1. Scenario table (best / average / worst cases)", "",
           f"**{ok_all.sum()}/{len(sc)} scenarios passed ({sc_acc:.1%})**", "",
           "| ID | Sensor | Case | Expected | Model output | Result |", "|---|---|---|---|---|---|"]
@@ -103,8 +118,10 @@ def main():
            f"**Full-action match: {o_all.mean():.1%}** (every actuator and every duration correct)", "",
            "| Output | Accuracy |", "|---|---|"]
     md += [f"| {k} | {v:.1%} |" for k, v in per.items()]
-    (ROOT / "docs" / "evaluation_report.md").write_text("\n".join(md) + "\n", encoding="utf-8")
-    print("\nSaved docs/evaluation_report.md")
+    report_path = Path(args.report_out)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text("\n".join(md) + "\n", encoding="utf-8")
+    print(f"\nSaved {report_path}")
 
 
 if __name__ == "__main__":

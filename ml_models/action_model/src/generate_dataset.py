@@ -14,8 +14,10 @@ learns to read the ACTIVE thresholds from node_rules_cache instead of memorising
 
 Usage:
     python src/generate_dataset.py --rows 80000 --seed 42
+    python src/generate_dataset.py --thresholds config/thresholds_cucumber.json \
+        --out data/training_data_cucumber.csv
 Output:
-    data/training_data.csv
+    data/training_data.csv (or whatever --out points to)
 """
 import argparse
 from pathlib import Path
@@ -77,10 +79,13 @@ def main():
     p.add_argument("--rows", type=int, default=80000)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--out", default=str(ROOT / "data" / "training_data.csv"))
+    p.add_argument("--thresholds", default=None,
+                   help="Path to a thresholds JSON (e.g. config/thresholds_cucumber.json). "
+                        "Defaults to config/thresholds.json when omitted.")
     args = p.parse_args()
 
     rng = np.random.default_rng(args.seed)
-    base = load_thresholds()
+    base = load_thresholds(args.thresholds) if args.thresholds else load_thresholds()
     rows = []
     for i in range(args.rows):
         tv = sample_thresholds(rng, base, jitter=rng.random() < 0.7)  # 30% use exact defaults
