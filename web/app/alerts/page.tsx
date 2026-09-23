@@ -5,8 +5,8 @@
 
 'use client';
 
-import React, { useState } from 'react';
-import { mockAlerts } from '@/lib/mock-data';
+import React, { useState, useEffect } from 'react';
+import { apiFetch } from '@/lib/api';
 import { toast } from '@/lib/store/toast-store';
 import type { AlertSeverity } from '@/types';
 import {
@@ -15,19 +15,51 @@ import {
   CheckCircleIcon,
 } from '@/components/icons';
 
-export default function AlertsPage() {
-  const [alerts, setAlerts] = useState(mockAlerts);
+interface Alert {
+  id: string;
+  title: string;
+  message: string;
+  severity: AlertSeverity;
+  is_read: boolean;
+  created_at: string;
+}
 
-  const markAsRead = (id: string) => {
-    setAlerts((prev) =>
-      prev.map((a) => (a.id === id ? { ...a, is_read: true } : a))
-    );
-    toast.info('Alert marked as resolved', 'Updated');
+export default function AlertsPage() {
+  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    fetchAlerts();
+  }, []);
+
+  const fetchAlerts = async () => {
+    setIsLoading(true);
+    try {
+      const data = await apiFetch.get<Alert[]>('/alerts/');
+      setAlerts(data);
+    } catch (err) {
+      console.error('Failed to fetch alerts:', err);
+      toast.error('Could not load alerts.', 'Error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const markAsRead = async (id: string) => {
+    try {
+      await apiFetch.post(`/alerts/${id}/acknowledge/`, {});
+      setAlerts((prev) =>
+        prev.map((a) => (a.id === id ? { ...a, is_read: true } : a))
+      );
+      toast.info('Alert marked as resolved', 'Updated');
+    } catch (err) {
+      toast.error('Failed to acknowledge alert.', 'Error');
+    }
   };
 
   const markAllRead = () => {
-    setAlerts((prev) => prev.map((a) => ({ ...a, is_read: true })));
-    toast.success('All alerts marked as read', 'Cleared');
+    // This could call a bulk acknowledge endpoint if available
+    toast.info('Feature coming soon: Bulk Acknowledge', 'Bulk Action');
   };
 
   const severityBadges: Record<AlertSeverity, { bg: string; text: string; icon: React.ReactNode }> = {

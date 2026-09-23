@@ -1,21 +1,5 @@
-"""
-URL configuration for config project.
-
-The `urlpatterns` list routes URLs to views. For more information please see:
-    https://docs.djangoproject.com/en/6.1/topics/http/urls/
-Examples:
-Function views
-    1. Add an import:  from my_app import views
-    2. Add a URL to urlpatterns:  path('', views.home, name='home')
-Class-based views
-    1. Add an import:  from other_app.views import Home
-    2. Add a URL to urlpatterns:  path('', Home.as_view(), name='home')
-Including another URLconf
-    1. Import the include() function: from django.urls import include, path
-    2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
-"""
 from django.contrib import admin
-from django.urls import path,include
+from django.urls import path, include
 
 admin.site.site_header = "CropFit Administration"
 admin.site.site_title = "CropFit Admin Portal"
@@ -23,7 +7,17 @@ admin.site.index_title = "Welcome to CropFit Admin Portal"
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('api/auth',include('apps.authentication.urls'),name='auth'),
-    path('api/sensor',include('apps.node.urls'),name='sensordata')
 
+    # Legacy / Authentication
+    path('api/auth/', include('apps.authentication.urls')),
+    path('api/sensor/', include('apps.node.urls')),
+
+    # API v1 Endpoints (Cloud Backend for GreenNode)
+    path('api/v1/greenhouses/', include('apps.greenhouses.urls')),
+    path('api/v1/nodes/', include('apps.node.urls')),
+    path('api/v1/conditions/', include('apps.conditions.urls')),
+    path('api/v1/rules/', include('apps.rules.urls')),
+    path('api/v1/devices/', include('apps.devices.urls')),
+    path('api/v1/alerts/', include('apps.alerts.urls')),
+    path('api/v1/reports/', include('apps.reports.urls')),
 ]

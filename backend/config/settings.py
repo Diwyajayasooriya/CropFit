@@ -49,12 +49,11 @@ INSTALLED_APPS = [
 'apps.devices.apps.DevicesConfig',
 'apps.rules.apps.RulesConfig',
 'apps.zone.apps.ZoneConfig',
-    'apps.commands.apps.CommandsConfig',
-    'apps.sensorHistory.apps.SensorhistoryConfig',
-    'apps.greenhouses.apps.GreenhousesConfig',
-    'apps.reports.apps.ReportsConfig'
-
-
+'apps.sensorHistory.apps.SensorhistoryConfig',
+'apps.greenhouses.apps.GreenhousesConfig',
+'apps.reports.apps.ReportsConfig',
+'apps.node.apps.NodeConfig',
+'apps.conditions.apps.ConditionsConfig',
 ]
 
 MIDDLEWARE = [

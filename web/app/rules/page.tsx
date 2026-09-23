@@ -5,28 +5,63 @@
 
 'use client';
 
-import React, { useState } from 'react';
-import { mockRules } from '@/lib/mock-data';
+import React, { useState, useEffect } from 'react';
+import { apiFetch } from '@/lib/api';
 import { toast } from '@/lib/store/toast-store';
+import { useAuthStore } from '@/lib/store/auth-store';
+
+interface Rule {
+  id: string;
+  name: string;
+  description: string;
+  is_active: boolean;
+  last_triggered?: string;
+}
 
 export default function RulesPage() {
-  const [rules, setRules] = useState(mockRules);
+  const [rules, setRules] = useState<Rule[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const { user } = useAuthStore();
 
-  const toggleRule = (id: string, name: string) => {
-    setRules((prev) =>
-      prev.map((r) => {
-        if (r.id === id) {
-          const next = !r.is_active;
-          if (next) {
-            toast.success(`Rule "${name}" enabled on Edge Gateway`, 'Rule Activated');
-          } else {
-            toast.warning(`Rule "${name}" disabled. Automation paused.`, 'Rule Deactivated');
-          }
-          return { ...r, is_active: next };
-        }
-        return r;
-      })
-    );
+  useEffect(() => {
+    fetchRules();
+  }, []);
+
+  const fetchRules = async () => {
+    setIsLoading(true);
+    try {
+      const data = await apiFetch.get<Rule[]>('/rules/');
+      setRules(data);
+    } catch (err) {
+      console.error('Failed to fetch rules:', err);
+      toast.error('Could not load automation rules.', 'Error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const toggleRule = async (id: string, name: string, currentStatus: boolean) => {
+    if (user?.role === 'farmer') {
+      toast.error('Farmers cannot modify automation rules.', 'Access Denied');
+      return;
+    }
+
+    try {
+      const next = !currentStatus;
+      await apiFetch.patch(`/rules/${id}/`, { is_active: next });
+      
+      setRules((prev) =>
+        prev.map((r) => (r.id === id ? { ...r, is_active: next } : r))
+      );
+
+      if (next) {
+        toast.success(`Rule "${name}" enabled on Edge Gateway`, 'Rule Activated');
+      } else {
+        toast.warning(`Rule "${name}" disabled. Automation paused.`, 'Rule Deactivated');
+      }
+    } catch (err) {
+      toast.error(`Failed to update rule "${name}"`, 'Error');
+    }
   };
 
   const handleCreateRule = () => {
@@ -45,12 +80,14 @@ export default function RulesPage() {
           </p>
         </div>
 
-        <button
-          onClick={handleCreateRule}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition-all shadow-md shadow-emerald-600/20 cursor-pointer self-start sm:self-auto"
-        >
-          <span>+ Create Automation Rule</span>
-        </button>
+        {user?.role !== 'farmer' && (
+          <button
+            onClick={handleCreateRule}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition-all shadow-md shadow-emerald-600/20 cursor-pointer self-start sm:self-auto"
+          >
+            <span>+ Create Automation Rule</span>
+          </button>
+        )}
       </div>
 
       <div className="space-y-4">
@@ -91,7 +128,7 @@ export default function RulesPage() {
                   </span>
                 )}
                 <button
-                  onClick={() => toggleRule(rule.id, rule.name)}
+                  onClick={() => toggleRule(rule.id, rule.name, rule.is_active)}
                   className={`w-12 h-6 rounded-full p-1 transition-colors cursor-pointer flex items-center ${
                     rule.is_active ? 'bg-emerald-600 justify-end' : 'bg-slate-300 justify-start'
                   }`}
