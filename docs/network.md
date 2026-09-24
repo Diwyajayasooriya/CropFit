@@ -1,6 +1,6 @@
 # GreenNode Networking Layer — Theory & Implementation
 
-This document covers the wireless networking theory behind GreenNode's hub design, then how it's actually built: Raspberry Pi 4, onboard radio in STA mode for uplink, USB WiFi adapter in AP mode hosting three isolated sub-node SSIDs, with per-device bandwidth partitioning and adaptive shedding under weak uplink conditions.
+This document covers the wireless networking theory behind GreenNode's hub design, then how it's actually built: Raspberry Pi 4, onboard radio in STA mode for uplink, USB WiFi adapter in AP mode hosting three isolated sub-node SSIDs plus a fourth for sub-node provisioning and a fifth for the hub's own farmer-facing WiFi setup, with per-device bandwidth partitioning and adaptive shedding under weak uplink conditions.
 
 ---
 
@@ -239,6 +239,49 @@ The fixed-SSID-in-firmware approach above is reasonable *because GreenNode contr
 
 A real off-the-shelf third-party sensor won't ship with GreenNode's specific SSID hardcoded in it, so a production version would need a different first step — device-as-temporary-AP (SoftAP) provisioning, BLE provisioning, or QR/NFC-assisted pairing are the standard answers, and if GreenNode ends up aggregating sensors from multiple vendors it likely needs a small plugin system (one adapter per provisioning method) rather than one fixed flow. That's a real scope decision for later, deliberately deferred rather than built now — see `learnings-and-principles.md`. Everything else in 1.12 (event-driven detection, the password-gated pairing window, the locked-down handoff subnet) carries over unchanged regardless of which first-contact mechanism eventually replaces the fixed passphrase.
 
+### 1.14 Hub-uplink provisioning — how GreenNode gets *its own* internet credentials
+
+Section 1.12 covers how a *sub-node* joins GreenNode. This section covers a different, earlier problem: how does GreenNode itself join the *farmer's* WiFi, given that a freshly unboxed unit has zero credentials for anything and, without an uplink, has no way to reach anything to be told any? Filling `wpa_supplicant.conf`'s `CHANGE_ME_upstream_ssid`/`passphrase` in by hand before shipping doesn't scale past a dev/test unit — a farmer's actual home/farm WiFi name and password aren't known until the unit is already in their hands.
+
+**The solution is SoftAP + captive portal** — the standard first-contact pattern most consumer IoT devices use (Chromecast, smart plugs, etc.): GreenNode temporarily becomes an access point *of its own*, the farmer's phone joins it, and a web page served by GreenNode itself collects the real WiFi credentials.
+
+**Why this is a 5th BSS on the existing USB radio, not a mode-switch on wlan0.** The naive version of this idea flips wlan0 (the onboard STA radio) into AP mode for setup, then back to STA once credentials arrive. That was rejected: it's exactly the single-radio AP+STA time-slicing problem Section 1.4 explains GreenNode avoids by design, and forcing wlan0 to alternate roles at runtime reintroduces it, plus adds real fragility (stopping `wpa_supplicant` and starting `hostapd` on the same physical interface, or vice versa, is a genuine source of driver/timing bugs). wlan1 (the USB radio) is *already* running multi-BSS `hostapd` with headroom for one more virtual interface, so `greennode-setup` (BSS4, `wlan1_4`, `10.0.14.0/24`) simply joins BSS0-3 as a fifth SSID on hardware already doing that job. wlan0 stays exactly what the rest of this document assumes it always is — STA-only — with no new code path for it to ever run `hostapd`.
+
+**Access control here is deliberately different from Section 1.12's pairing window.** `greennode-provision` (wlan1_3)'s passphrase is fixed and identical across every unit GreenNode ships, which is only safe because a human operator has to explicitly open a pairing window before anything on that network can actually be claimed (Section 1.12). `greennode-setup` (wlan1_4) has no such operator in the loop — there's no "backend" to press a button, just a farmer with a phone — so instead its passphrase is **unique per physical unit**, generated at flash time and printed on that unit's label. Reading the label already requires physically holding the device, and that possession *is* the access control. A shared passphrase here would mean anyone who's ever seen one GreenNode's label could remotely reconfigure every other farmer's hub — the opposite of the intended trust model.
+
+One consequence of that design: because the passphrase alone is a real per-unit secret, `greennode-setup` never needs to be turned off. It broadcasts permanently, the same way `greennode-provision` does, and doubles as the farmer's way to reconfigure WiFi later (moved router, changed password) — reconnect a phone to the same SSID with the same label passphrase, submit new credentials, done. No reset button, no re-authentication step, no separate "reconfigure mode" to build.
+
+**Wildcard DNS — why the setup network needs its own dnsmasq instance.** iOS, Android, and Windows all detect "is this WiFi network actually connected to the internet, or just a login page" by GETting a real, hardcoded hostname (`connectivitycheck.gstatic.com`, `captive.apple.com`, etc.) the instant a device joins a network, and popping the "sign in to network" prompt if that request doesn't behave the way it would on a real internet connection. Since `wlan1_4` has no forwarding at all (same isolation as `wlan1_3` — see 2.1's nftables coverage below), those real hostnames would just resolve normally and then hang until the TCP connection times out, which many phones read as "no internet, don't bother showing a portal" rather than "captive portal, show the prompt." The fix is a **wildcard DNS answer**: every hostname queried on `wlan1_4` resolves straight back to GreenNode's own gateway IP (`10.0.14.1`), so those probe requests land on GreenNode's own HTTP server immediately and the phone auto-launches its captive-portal browser. `dnsmasq`'s `address=/#/<ip>` directive that implements this is process-global, not scoped to one interface — adding it to the *main* `dnsmasq` instance (the one serving `wlan1`/`wlan1_1`/`wlan1_2`) would wildcard-hijack DNS for the sensor/actuator/admin subnets too. So `wlan1_4` runs a **second, fully independent `dnsmasq` process** (`config/dnsmasq/dnsmasq-setup.conf`, `systemd/greennode-dnsmasq-setup.service`) with its own PID file and lease file, keeping the wildcard's blast radius to exactly the one interface it's meant for.
+
+**The setup flow itself**, implemented by `scripts/uplink_provisioning.py`:
+
+```
+Farmer's phone                      GreenNode (wlan1_4, 10.0.14.1)
+ |                                            |
+ |-- joins "greennode-setup" ----------------->|  (label passphrase)
+ |                                            |
+ |<-- captive-portal probe redirected ---------|  wildcard DNS + a 302 on
+ |    to the setup page, phone auto-opens it   |  every unrecognized path
+ |                                            |
+ |-- GET /api/networks ------------------------>|
+ |<-- nearby SSIDs, from a live wlan0 scan -----|  wpa_cli scan/scan_results
+ |                                            |
+ |-- POST /api/provision {ssid, password} ----->|
+ |                                            |  add_network / set_network /
+ |                                            |  select_network on wlan0,
+ |                                            |  poll for wpa_state=COMPLETED
+ |                                            |  + a real IP, up to 25s
+ |<-- 200 {"detail":"connected"} ---------------|  (or roll back to whatever
+ |     or 502 with a plain-English reason       |   was working before, on
+ |                                            |   failure — never strands
+ |                                            |   a unit that was already
+ |                                            |   online because of a typo)
+```
+
+If it succeeds, `wpa_cli save_config` persists the new network into `wpa_supplicant-wlan0.conf` (the file already has `update_config=1` for exactly this). If it fails — almost always a wrong password — the new network entry is removed and, if wlan0 had a previously-working network, GreenNode re-selects it rather than sitting disconnected; the farmer sees a plain-English reason and can just retry with the form still open.
+
+A **loopback-only status endpoint** (`127.0.0.1:8092/uplink/status`) mirrors `pairing_watcher.py`'s `/pairing/status` convention, so the edge app or admin panel can show real uplink state (`connected`, `ssid`, `ip`) in its own UI without shelling out to `wpa_cli` itself.
+
 ---
 
 ## Part 2 — Implementation
@@ -249,10 +292,11 @@ A real off-the-shelf third-party sensor won't ship with GreenNode's specific SSI
 greennode-network/
 ├── README.md                          (this file)
 ├── config/
-│   ├── hostapd/hostapd.conf           (multi-BSS AP config: wlan1/wlan1_1/wlan1_2/wlan1_3)
-│   ├── wpa_supplicant/wpa_supplicant.conf   (STA uplink config, wlan0)
-│   ├── dnsmasq/dnsmasq.conf           (per-subnet DHCP + static reservations + provisioning)
-│   ├── dhcpcd/dhcpcd-append.conf      (static IPs for AP interfaces)
+│   ├── hostapd/hostapd.conf           (multi-BSS AP config: wlan1/wlan1_1/wlan1_2/wlan1_3/wlan1_4)
+│   ├── wpa_supplicant/wpa_supplicant.conf   (STA uplink config, wlan0 — see 1.14, no longer needs pre-filling for shipped units)
+│   ├── dnsmasq/dnsmasq.conf           (per-subnet DHCP + static reservations + sub-node provisioning; wlan1_4 deliberately NOT here, see below)
+│   ├── dnsmasq/dnsmasq-setup.conf     (NEW — standalone 2nd dnsmasq instance, wlan1_4 only, wildcard captive-portal DNS — see 1.14)
+│   ├── dhcpcd/dhcpcd-append.conf      (static IPs for AP interfaces, incl. wlan1_4)
 │   └── udev/70-greennode-net.rules    (pins USB adapter to wlan1 by MAC)
 ├── registry/
 │   ├── devices.csv                    (MAC → IP → tier → interface mapping — permanent, provisioned devices)
@@ -260,15 +304,18 @@ greennode-network/
 ├── scripts/
 │   ├── install.sh                     (one-shot setup: packages, configs, services)
 │   ├── enable-ip-forwarding.sh
-│   ├── nftables-rules.sh              (NAT + inter-subnet isolation + provisioning lockdown)
-│   ├── tc-htb-setup.sh                (base HTB trees, 4 interfaces incl. provisioning flat cap)
+│   ├── nftables-rules.sh              (NAT + inter-subnet isolation + provisioning/setup lockdown)
+│   ├── tc-htb-setup.sh                (base HTB trees, 5 interfaces incl. provisioning + setup flat caps)
 │   ├── tc-add-device-classes.sh       (per-device leaf classes from registry/devices.csv)
 │   ├── generate-dhcp-hosts.sh         (regenerates dnsmasq static reservations from registry/devices.csv)
 │   ├── shedding_daemon.py             (adaptive shedding, polls RSSI + tc stats)
-│   └── pairing_watcher.py             (device detection via hostapd events + provisioning handoff — see 1.12)
+│   ├── pairing_watcher.py             (SUB-NODE device detection via hostapd events + provisioning handoff — see 1.12)
+│   └── uplink_provisioning.py         (NEW — HUB'S OWN uplink SoftAP + captive portal — see 1.14)
 └── systemd/
     ├── greennode-shedding.service
-    └── greennode-pairing-watcher.service
+    ├── greennode-pairing-watcher.service
+    ├── greennode-dnsmasq-setup.service        (NEW)
+    └── greennode-uplink-provisioning.service  (NEW)
 ```
 
 ### 2.2 Deployment order
@@ -276,10 +323,11 @@ greennode-network/
 1. Flash Raspberry Pi OS (Bookworm or later), enable SSH.
 2. Plug in the USB WiFi adapter, confirm it's `hostapd`-AP-mode-capable (`iw list` → check for `AP` under `Supported interface modes`).
 3. Find its MAC address (`ip link show`), fill it into `config/udev/70-greennode-net.rules` so it's always named `wlan1` regardless of USB enumeration order.
-4. Fill in real upstream SSID/passphrase in `config/wpa_supplicant/wpa_supplicant.conf`, and real sub-node/provisioning SSIDs/passphrases in `config/hostapd/hostapd.conf`.
+4. Fill in real sub-node/provisioning SSIDs/passphrases in `config/hostapd/hostapd.conf` — **including a fresh, unique-per-unit passphrase for BSS4 (`greennode-setup`)**, generated at flash time and printed on that physical unit's label (see 1.14; do NOT reuse one passphrase across units the way BSS0-3 do). `config/wpa_supplicant/wpa_supplicant.conf`'s upstream SSID/passphrase can now be left as `CHANGE_ME` for units shipping to a farmer — that's the problem 1.14 solves — but still fill it in for a dev/test unit on a network you already control.
 5. Fill in real ESP32 MAC addresses in `registry/devices.csv` for any devices you're pre-registering directly; devices onboarded through the pairing flow (1.12) get added automatically once the main backend's finalize route exists.
 6. Run `scripts/install.sh` as root.
-7. Verify: `systemctl status hostapd dnsmasq greennode-shedding greennode-pairing-watcher`, `tc -s class show dev wlan1`, `iw dev wlan0 link`, `curl http://127.0.0.1:8091/pairing/status`.
+7. Verify: `systemctl status hostapd dnsmasq greennode-dnsmasq-setup greennode-shedding greennode-pairing-watcher greennode-uplink-provisioning`, `tc -s class show dev wlan1`, `iw dev wlan0 link`, `curl http://127.0.0.1:8091/pairing/status`, `curl http://127.0.0.1:8092/uplink/status`.
+8. For a shipped (not dev/test) unit with no upstream credentials yet: connect a phone to `greennode-setup` using the label passphrase, and the captive portal should open automatically — see 1.14 for the flow.
 
 See inline comments in each config/script for what needs to be filled in before first boot — placeholders are marked `CHANGE_ME`.
 
@@ -304,17 +352,19 @@ Everything below is a point where the repo hands you a working default that you'
 
 | File | What to customize |
 |---|---|
-| `config/hostapd/hostapd.conf` | The four `wpa_passphrase` values (`CHANGE_ME_*`); `channel=1` if your site's upstream router isn't on channel 6 (pick a non-overlapping channel — 1/6/11 — away from whatever `wpa_supplicant` connects to); `country_code` if deploying outside Sri Lanka |
-| `config/wpa_supplicant/wpa_supplicant.conf` | Real upstream `ssid`/`psk`; add more `network={}` blocks for fallback sites (e.g. a backup mobile hotspot) — `priority=` picks between them |
+| `config/hostapd/hostapd.conf` | The four sub-node `wpa_passphrase` values (`CHANGE_ME_*`); **BSS4's `wpa_passphrase` must be a fresh value generated per physical unit** (see 1.14), never reused; `channel=1` if your site's upstream router isn't on channel 6 (pick a non-overlapping channel — 1/6/11 — away from whatever `wpa_supplicant` connects to); `country_code` if deploying outside Sri Lanka |
+| `config/wpa_supplicant/wpa_supplicant.conf` | Real upstream `ssid`/`psk` for a dev/test unit; leave as `CHANGE_ME` for units shipping to a farmer (they set this themselves via `greennode-setup`, see 1.14). Add more `network={}` blocks for fallback sites (e.g. a backup mobile hotspot) — `priority=` picks between them |
 | `config/udev/70-greennode-net.rules` | The USB adapter's real MAC address (`CHANGE_ME:MAC:...`) |
 | `config/dnsmasq/dnsmasq.conf` | DHCP range sizes per subnet if you expect more than ~190 devices on one SSID; lease times (provisioning is deliberately short, 5m — sensors/actuators are 12h) |
+| `config/dnsmasq/dnsmasq-setup.conf` | Lease time (15m default) if farmers need longer to complete setup; this file must stay wlan1_4-only — see 1.14 for why the wildcard can't move into the main `dnsmasq.conf` |
 | `registry/devices.csv` | Every row — this is your actual device fleet: MAC, reserved IP, interface, priority tier, rate/ceil, name |
 | `scripts/tc-htb-setup.sh` | `TOTAL_RATE` (set to your USB adapter's realistic throughput, not its PHY rate); the per-SSID `rate`/`ceil`/`prio` triples if your actuator:sensor traffic ratio differs from the assumed split |
-| `scripts/nftables-rules.sh` | `PROVISION_PORT` if you change `pairing_watcher.py`'s `PROVISION_PORT` env var — the two must match |
+| `scripts/nftables-rules.sh` | `PROVISION_PORT` if you change `pairing_watcher.py`'s `PROVISION_PORT` env var; `SETUP_HTTP_PORT` if you change `uplink_provisioning.py`'s `SETUP_HTTP_PORT` env var — each pair must match |
 | `scripts/pairing_watcher.py` | `DEFAULT_WINDOW_SECONDS` (how long a pairing window stays open); `BACKEND_FINALIZE_URL` (unset = stub mode, see 2.3) |
 | `systemd/greennode-pairing-watcher.service` | Uncomment + set `Environment=BACKEND_FINALIZE_URL=...` once your FastAPI finalize route exists |
+| `scripts/uplink_provisioning.py` | `CONNECT_TIMEOUT_S`/`SCAN_TIMEOUT_S` if your greenhouse site's real routers are slow to associate against or scan results take longer to settle; `NEW_NETWORK_PRIORITY` if you introduce more than two `network={}` blocks and need finer priority ordering |
 | `scripts/shedding_daemon.py` | `RSSI_DEGRADED_DBM`/`RSSI_RECOVERED_DBM` thresholds and `CONSECUTIVE_POLLS_TO_ACT` — tune these once you have real RSSI readings from your actual greenhouse site rather than the placeholder defaults |
 
-Not customizable per-deployment, but worth knowing where they live if requirements change: the inter-subnet isolation logic (`nftables-rules.sh` forward chain), the HTB tree structure itself (`tc-htb-setup.sh`'s `setup_tree` function), and the hostapd-event detection mechanism (`pairing_watcher.py`'s `hostapd_listener` function) — these are architecture, not per-site configuration.
+Not customizable per-deployment, but worth knowing where they live if requirements change: the inter-subnet isolation logic (`nftables-rules.sh` forward chain), the HTB tree structure itself (`tc-htb-setup.sh`'s `setup_tree` function), the hostapd-event detection mechanism (`pairing_watcher.py`'s `hostapd_listener` function), and the connect/rollback logic (`uplink_provisioning.py`'s `apply_new_network` function) — these are architecture, not per-site configuration.
 
 Everything not covered by `pairing_watcher.py`'s stub mode — the actual FastAPI `/internal/provision/finalize` route, the SQLite `devices` table, MQTT credential/ACL generation — lives in your main backend codebase, outside this repo, and is the next piece to build.

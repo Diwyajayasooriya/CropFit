@@ -1,0 +1,15 @@
+[Unit]
+Description=GreenNode hub-uplink WiFi provisioning (SoftAP + captive portal on wlan1_4)
+After=network.target hostapd.service greennode-dnsmasq-setup.service
+Requires=hostapd.service
+
+[Service]
+Type=simple
+# Binds port 80 for the captive portal — must run as root.
+ExecStart=/usr/bin/python3 /opt/greennode-network/scripts/uplink_provisioning.py
+Restart=on-failure
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,21 @@
+[Unit]
+Description=GreenNode setup-network DNS/DHCP (wlan1_4, wildcard captive-portal hijack)
+After=network.target hostapd.service dnsmasq.service
+Requires=hostapd.service
+# Runs ALONGSIDE, not instead of, the main dnsmasq.service — that one
+# still serves the sensor/actuator/admin/sub-node-provisioning subnets
+# unchanged. Two independent dnsmasq processes, two independent config
+# files, two independent PID/lease files (see
+# config/dnsmasq/dnsmasq-setup.conf for why this is a fully separate
+# instance rather than one more block in the main config). Do not add
+# Conflicts= here — both must be running at once.
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/dnsmasq --no-daemon --conf-file=/etc/dnsmasq-greennode-setup.conf
+Restart=on-failure
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target

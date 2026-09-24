@@ -1,0 +1,22 @@
+{
+  "fan_accuracy": 0.991875,
+  "vent_accuracy": 0.994375,
+  "mister_accuracy": 0.99625,
+  "heater_accuracy": 0.993375,
+  "irrigation_accuracy": 0.998375,
+  "lights_accuracy": 0.99925,
+  "co2_inject_accuracy": 0.998875,
+  "fan_min_MAE_when_on": 2.7927426536064113,
+  "fan_min_within_5min": 0.9205253784505788,
+  "mister_min_MAE_when_on": 1.4783686966106366,
+  "mister_min_within_5min": 0.9906310278313585,
+  "heater_min_MAE_when_on": 2.9912361623616235,
+  "heater_min_within_5min": 0.9063653136531366,
+  "irrigation_min_MAE_when_on": 1.5223408461842625,
+  "irrigation_min_within_5min": 0.9746935547647292,
+  "lights_min_MAE_when_on": 18.58543417366947,
+  "lights_min_within_5min": 0.6666666666666666,
+  "co2_min_MAE_when_on": 1.0485133020344288,
+  "co2_min_within_5min": 0.9984350547730829,
+  "full_action_match": 0.893625
+}

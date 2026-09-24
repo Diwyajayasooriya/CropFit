@@ -1,9 +1,11 @@
-# GreenNode — Prototype Completion: MQTT Broker, Local Provisioning, Missing Services
+# GreenNode — Prototype Completion: MQTT Broker, Local Provisioning, Hub-Uplink Setup, Missing Services
 
 Addendum to `network.md` and `DATA_PIPELINE.md`, covering the round of
 gap-fixing that completes the first working prototype loop: a device
 connects, gets provisioned, and its data/commands actually flow — with
-nothing silently missing in between.
+nothing silently missing in between — plus closing a separate gap found
+afterward: GreenNode itself had no way to receive its own internet
+credentials from a farmer (Section 5).
 
 ---
 
@@ -108,7 +110,67 @@ all) and enables both new units.
   before the STA uplink is up and NTP has synced) but ensures it's not
   silently disabled either.
 
-## 5. Still deliberately not built
+## 5. Hub-uplink provisioning — GreenNode can now get its own WiFi credentials
+
+This closes a gap that was there from the start but only became obvious
+once a real out-of-box unit was considered end to end: `pairing_watcher.py`
+and BSS3 (`wlan1_3`) solve how a *sub-node* joins GreenNode, but nothing
+solved how GreenNode itself joins the *farmer's* WiFi — `wpa_supplicant.conf`
+just had `CHANGE_ME_upstream_ssid`/`passphrase` placeholders, filled in by
+hand before shipping. That doesn't scale past a dev/test unit; a farmer's
+real WiFi name and password aren't known until the box is already on their
+kitchen table.
+
+**Fixed with SoftAP + captive portal**, the same first-contact pattern
+most consumer IoT devices use:
+
+- `config/hostapd/hostapd.conf` — new BSS4, `wlan1_4` / `greennode-setup`,
+  a 5th SSID on the same already-AP USB radio (not a mode-switch on
+  wlan0 — see `network.md` Section 1.14 for why that idea was rejected).
+  Its passphrase is **unique per physical unit**, printed on that unit's
+  label — a deliberately different trust model from BSS0-3's shared
+  passphrases, since there's no operator here to gate a pairing window
+  the way `pairing_watcher.py` does for sub-nodes.
+- `config/dnsmasq/dnsmasq-setup.conf` + `systemd/greennode-dnsmasq-setup.service`
+  — a **second, independent dnsmasq process**, `wlan1_4`-only, doing
+  wildcard DNS (every hostname → GreenNode itself) so iOS/Android/Windows
+  captive-portal probes land on GreenNode's own page instead of hanging.
+  Kept out of the main `dnsmasq.conf` specifically so the wildcard can't
+  leak into and break real DNS resolution on the sensor/actuator/admin
+  subnets.
+- `scripts/uplink_provisioning.py` (new, stdlib-only, mirrors
+  `pairing_watcher.py`'s shape) — serves the actual setup page +
+  `/api/networks` (live `wpa_cli` scan of wlan0) + `/api/provision`
+  (applies the chosen SSID/password to wlan0 via `wpa_cli`, waits up to
+  25s for `wpa_state=COMPLETED` + a real IP, rolls back to whatever was
+  previously working on failure instead of stranding the unit). Also
+  exposes `127.0.0.1:8092/uplink/status`, the same loopback-status
+  convention `pairing_watcher.py` uses on `8091`.
+- `scripts/nftables-rules.sh` / `scripts/tc-htb-setup.sh` — `wlan1_4`
+  gets the identical isolation treatment `wlan1_3` already has: locked
+  to only its own HTTP port + its dnsmasq instance's DNS port, no
+  forwarding anywhere (not even to the internet), flat HTB cap instead
+  of per-device classes.
+
+**One simplification worth knowing about, since it removes a piece the
+sub-node pairing flow has that this one doesn't**: there's no pairing-
+window state machine here at all. Because BSS4's passphrase is genuinely
+per-unit rather than shared, reading it off the physical label already
+*is* the access control — anyone who can do that already has the unit in
+hand. `greennode-setup` broadcasts permanently and `/api/provision` is
+always live to whoever's associated on it, which also means the exact
+same flow doubles as "reconfigure WiFi" later (new router, changed
+password) with no separate reset button or admin trigger to build.
+
+**Not built, deliberately, same spirit as Section 6 (next)**: multi-router
+mesh/roaming support (still just static `network={}` priority blocks in
+`wpa_supplicant.conf`, per `network.md` 1.14's diagram); a physical
+button to force `greennode-setup` into some different "armed" state
+(not needed, per the point above); rotating or expiring the per-unit
+label passphrase after first successful setup (revisit only if a real
+threat model emerges where that matters more than farmer convenience).
+
+## 6. Still deliberately not built
 
 Unchanged from `DATA_PIPELINE.md`'s list — actuator state feedback,
 real third-party vendor integration, rule conflict resolution.

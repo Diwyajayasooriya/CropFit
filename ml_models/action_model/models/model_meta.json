@@ -1,0 +1,59 @@
+{
+  "feature_names": [
+    "air_temp",
+    "rh",
+    "soil_moisture",
+    "soil_temp",
+    "co2",
+    "outside_temp",
+    "dli_so_far",
+    "hour_sin",
+    "hour_cos",
+    "is_day",
+    "is_night",
+    "co2_window",
+    "light_window",
+    "d_cool_trigger",
+    "d_cool_target",
+    "d_heat",
+    "d_rh_high",
+    "d_rh_low",
+    "d_sm_low",
+    "d_co2",
+    "d_soil_heat",
+    "d_inside_outside",
+    "d_dli"
+  ],
+  "switch_actuators": [
+    "mister",
+    "heater",
+    "irrigation",
+    "lights",
+    "co2_inject"
+  ],
+  "duration_keys": [
+    "fan_min",
+    "mister_min",
+    "heater_min",
+    "irrigation_min",
+    "lights_min",
+    "co2_min"
+  ],
+  "duration_caps_min": [
+    60.0,
+    30.0,
+    90.0,
+    45.0,
+    240.0,
+    30.0
+  ],
+  "output_order": [
+    "fan",
+    "vent",
+    "switches",
+    "durations"
+  ],
+  "round_to_min": 5,
+  "trained_on": "C:\\Users\\Dewnith\\Documents\\GitHub\\CropFit\\ml_models\\action_model\\data\\training_data.csv",
+  "rows": 80000
+}

@@ -59,4 +59,14 @@ tc class add dev wlan1_3 parent 1: classid 1:1 htb rate 1mbit ceil 1mbit
 tc class add dev wlan1_3 parent 1:1 classid 1:10 htb rate 256kbit ceil 1mbit prio 7
 echo "[ok] Flat cap on wlan1_3 (provisioning, 256kbit/1mbit — no per-device classes, devices are transient)"
 
+# setup (wlan1_4, NEW): same reasoning as wlan1_3 above — one farmer's
+# phone, transient, no per-device classes needed. Slightly higher floor
+# than provisioning since this one serves an actual HTML page + JS to a
+# human rather than a single ESP32 HTTP call.
+tc qdisc del dev wlan1_4 root 2>/dev/null || true
+tc qdisc add dev wlan1_4 root handle 1: htb default 10
+tc class add dev wlan1_4 parent 1: classid 1:1 htb rate 1mbit ceil 1mbit
+tc class add dev wlan1_4 parent 1:1 classid 1:10 htb rate 512kbit ceil 1mbit prio 7
+echo "[ok] Flat cap on wlan1_4 (hub-uplink setup, 512kbit/1mbit — no per-device classes, transient)"
+
 echo "[ok] Base HTB trees ready. Run tc-add-device-classes.sh next."
