@@ -1,0 +1,10 @@
+# Pins the USB WiFi adapter (AP radio) to a stable interface name so it's
+# always "wlan1" regardless of USB enumeration order at boot, and the
+# onboard radio stays "wlan0". Without this, a reboot can silently swap
+# which physical radio gets which name and break the whole AP/STA split.
+#
+# Find the USB adapter's MAC with: ip link show
+# (unplug it, run `ip link show` before/after to diff which one appeared)
+# Replace CHANGE_ME below with that MAC address.
+
+SUBSYSTEM=="net", ACTION=="add", ATTR{address}=="CHANGE_ME:MAC:ADDR:ES:S0", NAME="wlan1"

@@ -1,0 +1,3 @@
+# Raspberry Pi hub: inference only (no TensorFlow needed)
+numpy>=1.24,<2
+onnxruntime>=1.16

@@ -1,0 +1,10 @@
+[Unit]
+Description=GreenNode rules engine — one evaluation pass (triggered by greennode-rules.timer)
+After=network.target mosquitto.service
+Requires=mosquitto.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/greennode-edge
+ExecStart=/usr/bin/python3 /opt/greennode-edge/rules_engine_example.py
+User=root

@@ -1,0 +1,8 @@
+# Training PC / laptop (Python 3.10 or 3.11). These versions are pinned because
+# tf2onnx does not yet support Keras 3 (TensorFlow 2.16+).
+tensorflow==2.15.1
+tf2onnx==1.16.1
+onnx==1.16.2
+onnxruntime==1.18.1
+numpy==1.26.4
+pandas==2.2.2

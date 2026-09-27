@@ -53,3 +53,6 @@ dist/
 .pytest_cache/
 htmlcov/
 EOF
+
+ml_models/action_model/docs/evaluation_report.md
+ml_models/action_model/models/

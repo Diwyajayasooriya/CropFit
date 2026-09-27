@@ -1,0 +1,14 @@
+# GreenNode MQTT ACL — service accounts above the marker (static, hand-
+# maintained), per-device entries below it (generated — do not hand-edit
+# below the marker, edit registry/devices.csv and re-run
+# generate-mqtt-creds.sh instead, or let pairing_watcher.py append new
+# devices live as they're paired).
+
+user greennode-ingest
+topic read greennode/+/data
+topic read greennode/+/status
+
+user greennode-dispatch
+topic write greennode/+/cmd
+
+# --- GENERATED DEVICE ENTRIES BELOW THIS LINE ---

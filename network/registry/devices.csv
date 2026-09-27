@@ -1,0 +1,19 @@
+# Single source of truth for every sub-node GreenNode knows about.
+# Consumed by: scripts/generate-dhcp-hosts.sh (dnsmasq reservations)
+#              scripts/tc-add-device-classes.sh (per-device HTB classes)
+#              scripts/shedding_daemon.py (tier-based shedding order)
+#
+# mac              : sub-node's WiFi MAC address
+# ip               : reserved IP (must fall inside the matching iface's dhcp-range)
+# iface            : wlan1 (sensors) | wlan1_1 (actuators) | wlan1_2 (admin)
+# tier             : 0 = never shed (actuators), 1 = shed last, 2 = shed first
+# rate_kbit        : guaranteed floor bandwidth (kbit/s)
+# ceil_kbit        : burst ceiling (kbit/s)
+# name             : human-readable label, for logs
+#
+mac,ip,iface,tier,rate_kbit,ceil_kbit,name
+AA:BB:CC:DD:EE:01,10.0.10.101,wlan1,2,256,2048,esp32-soil-moisture-01
+AA:BB:CC:DD:EE:02,10.0.10.102,wlan1,2,256,2048,esp32-ambient-temp-01
+AA:BB:CC:DD:EE:03,10.0.10.103,wlan1,1,256,2048,esp32-soil-moisture-02
+AA:BB:CC:DD:EE:11,10.0.11.101,wlan1_1,0,512,4096,esp32-irrigation-valve-01
+AA:BB:CC:DD:EE:12,10.0.11.102,wlan1_1,0,512,4096,esp32-vent-actuator-01
