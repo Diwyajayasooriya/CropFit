@@ -1,7 +1,6 @@
-from rest_framework import viewsets, permissions, status
+from rest_framework import viewsets, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-
 from apps.conditions.models.models import Condition, ConditionReading
 from apps.conditions.serializers import (
     ConditionSerializer,
@@ -9,6 +8,7 @@ from apps.conditions.serializers import (
     BulkSyncRequestSerializer,
 )
 from apps.node.models.nodeDetails.models import Node
+from config import permissions
 
 
 class ConditionViewSet(viewsets.ModelViewSet):
