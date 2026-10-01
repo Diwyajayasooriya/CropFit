@@ -4,9 +4,11 @@ import { useEffect } from "react";
 import { useDashboardStore } from "@/store/dashboardStore";
 import MetricCard from "./MetricCard";
 import GreenhouseStatusBanner from "./GreenhouseStatusBanner";
+import { useRouter } from "next/navigation";
 import Button from "@/components/ui/Button";
 
 export default function GreenhouseMonitorZone() {
+  const router = useRouter();
   const { greenhouse, fetchGreenhouse } = useDashboardStore();
 
   useEffect(() => {
@@ -76,7 +78,7 @@ export default function GreenhouseMonitorZone() {
 
       {/* Advanced Settings Row */}
       <div className="flex justify-end pt-1">
-        <Button variant="ghost" size="sm" className="text-xs text-gn-text-muted hover:text-gn-text">
+        <Button variant="ghost" size="sm" onClick={() => router.push("/settings?tab=greenhouse")} className="text-xs text-gn-text-muted hover:text-gn-text">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
             <circle cx="8" cy="8" r="3" stroke="currentColor" strokeWidth="1.2" />
             <path

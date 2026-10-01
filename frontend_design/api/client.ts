@@ -16,6 +16,72 @@ interface RequestOptions {
 function getMockResponse<T>(endpoint: string, body?: unknown): T {
   const reqBody = (body || {}) as Record<string, any>;
 
+  // ── Settings endpoints (must precede the generic matchers below) ──
+  if (endpoint.startsWith("/account/subscription")) {
+    const plans = [
+      { id: "seedling", name: "Seedling", priceLabel: "Free", deviceLimit: 3, retentionDays: 7, features: ["1 greenhouse", "Basic alerts", "7-day history"] },
+      { id: "grower", name: "Grower", priceLabel: "$12 / mo", deviceLimit: 10, retentionDays: 90, features: ["3 greenhouses", "Automation schedules", "90-day history"] },
+      { id: "harvest", name: "Harvest", priceLabel: "$29 / mo", deviceLimit: 50, retentionDays: 365, features: ["Unlimited greenhouses", "ML suggestions", "1-year history"] },
+    ];
+    const planId = (reqBody.planId as string) || "grower";
+    const plan = plans.find((p) => p.id === planId) ?? plans[1];
+    const subscription = {
+      planId: plan.id,
+      planName: plan.name,
+      tier: plan.id === "seedling" ? "Free tier" : "Paid tier",
+      usage: { devices: 5, deviceLimit: plan.deviceLimit, retentionDays: 31, retentionLimitDays: plan.retentionDays },
+    };
+    return (body ? subscription : { subscription, plans }) as unknown as T;
+  }
+
+  if (endpoint.endsWith("/info")) {
+    return {
+      id: "GN-HUB-PERA-01",
+      name: reqBody.name || "GreenNode Hub Alpha",
+      model: "NodeMini",
+      serial: "GN-NM-2026-004217",
+      wifiSsid: "Greenhouse-WiFi-5G",
+      firmwareVersion: "v1.2.0-edge",
+    } as unknown as T;
+  }
+
+  if (endpoint.endsWith("/wifi")) {
+    return { ssid: reqBody.ssid } as unknown as T;
+  }
+
+  if (endpoint.includes("/firmware")) {
+    const updating = endpoint.endsWith("/update");
+    return {
+      current: "v1.2.0-edge",
+      latest: "v1.3.1-edge",
+      updateAvailable: true,
+      state: updating ? "installing" : "idle",
+      progress: updating ? 100 : 0,
+    } as unknown as T;
+  }
+
+  if (endpoint.endsWith("/remove") || endpoint.endsWith("/factory-reset")) {
+    return { success: true } as unknown as T;
+  }
+
+  if (endpoint.endsWith("/layout")) {
+    return (
+      body ?? { name: "Greenhouse A", lengthM: 12, widthM: 6, pins: [], location: null }
+    ) as unknown as T;
+  }
+
+  if (endpoint.includes("/schedules")) {
+    if (/\/schedules\/.+/.test(endpoint)) {
+      return (body ? reqBody : { success: true }) as unknown as T;
+    }
+    if (body) return { id: `sch-${Date.now()}`, ...reqBody } as unknown as T;
+    return [
+      { id: "sch-1", actuatorId: "act-valve-01", action: "Open Valve", time: "06:30", durationMin: 20, recurrence: { kind: "recurring", days: [1, 2, 3, 4, 5] }, enabled: true },
+      { id: "sch-2", actuatorId: "act-valve-01", action: "Open Valve", time: "06:40", durationMin: 15, recurrence: { kind: "recurring", days: [1, 3, 5] }, enabled: true },
+      { id: "sch-3", actuatorId: "act-fan-01", action: "Turn On Fan", time: "13:00", durationMin: 30, recurrence: { kind: "recurring", days: [0, 1, 2, 3, 4, 5, 6] }, enabled: false },
+    ] as unknown as T;
+  }
+
   if (endpoint.includes("/auth/signup") || endpoint.includes("/auth/signin")) {
     return {
       success: true,

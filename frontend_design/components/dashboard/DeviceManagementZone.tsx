@@ -9,9 +9,11 @@ import HealthStatus from "./HealthStatus";
 import DeviceMetrics from "./DeviceMetrics";
 import SubDeviceList from "./SubDeviceList";
 import AddDeviceModal from "./AddDeviceModal";
+import { useRouter } from "next/navigation";
 import Button from "@/components/ui/Button";
 
 export default function DeviceManagementZone() {
+  const router = useRouter();
   const {
     deviceName,
     setDeviceName,
@@ -97,7 +99,7 @@ export default function DeviceManagementZone() {
 
         {/* Advanced settings */}
         <div className="mt-auto pt-3 border-t border-gn-text-dim/8">
-          <Button variant="ghost" size="sm" className="w-full text-xs">
+          <Button variant="ghost" size="sm" onClick={() => router.push("/settings?tab=device")} className="w-full text-xs">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
               <circle cx="8" cy="8" r="3" stroke="currentColor" strokeWidth="1.2" />
               <path

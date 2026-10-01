@@ -3,6 +3,8 @@
 import DashboardCard from "./DashboardCard";
 import SparklineBar from "./SparklineBar";
 import type { GreenhouseMetric } from "@/api/types";
+import { useSettingsStore } from "@/store/settingsStore";
+import { convertReading } from "@/lib/units";
 
 interface MetricCardProps {
   metric: GreenhouseMetric;
@@ -10,6 +12,8 @@ interface MetricCardProps {
 }
 
 export default function MetricCard({ metric, delay }: MetricCardProps) {
+  const { temp, system } = useSettingsStore();
+  const shown = convertReading(metric.value, metric.unit, { temp, system });
   return (
     <DashboardCard variant="green" delay={delay} className="flex flex-col justify-between">
       {/* Label */}
@@ -20,10 +24,10 @@ export default function MetricCard({ metric, delay }: MetricCardProps) {
       {/* Value */}
       <div className="flex items-baseline gap-1.5 mb-3">
         <span className="text-3xl font-heading font-bold text-gn-text">
-          {metric.value.toLocaleString()}
+          {shown.value.toLocaleString()}
         </span>
         <span className="text-sm text-gn-text-muted font-body">
-          {metric.unit}
+          {shown.unit}
         </span>
       </div>
 

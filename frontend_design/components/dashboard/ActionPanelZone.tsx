@@ -7,9 +7,11 @@ import GrowthStageHeader from "./GrowthStageHeader";
 import TargetConditions from "./TargetConditions";
 import SuggestedActions from "./SuggestedActions";
 import ManualOverride from "./ManualOverride";
+import { useRouter } from "next/navigation";
 import Button from "@/components/ui/Button";
 
 export default function ActionPanelZone() {
+  const router = useRouter();
   const {
     actionPanel,
     subDevices,
@@ -66,7 +68,7 @@ export default function ActionPanelZone() {
 
       {/* Advanced Settings */}
       <div className="pt-2 flex justify-between items-center text-xs">
-        <Button variant="ghost" size="sm" className="w-full text-xs text-gn-text-muted hover:text-gn-text">
+        <Button variant="ghost" size="sm" onClick={() => router.push("/settings?tab=automation")} className="w-full text-xs text-gn-text-muted hover:text-gn-text">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
             <circle cx="8" cy="8" r="3" stroke="currentColor" strokeWidth="1.2" />
             <path

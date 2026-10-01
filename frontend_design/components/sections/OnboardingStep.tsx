@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 import type { OnboardingStepData } from "@/lib/constants";
-import Input from "@/components/ui/Input";
+import WifiCredentialsForm from "@/components/ui/WifiCredentialsForm";
 
 interface OnboardingStepProps {
   step: OnboardingStepData;
@@ -231,38 +231,13 @@ export default function OnboardingStep({
 
       {/* Network Step Inline Mini-Form */}
       {step.icon === "network" && (
-        <div className="w-full max-w-xs mb-8 p-4 rounded-2xl bg-gn-surface-raised/80 border border-gn-green/20 backdrop-blur-sm space-y-3 text-left shadow-lg">
-          <div className="flex items-center justify-between pb-1.5 border-b border-gn-text-dim/10">
-            <span className="text-[11px] font-mono text-gn-amber flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-gn-amber animate-pulse" />
-              BLE Pairing Active
-            </span>
-            <span className="text-[10px] font-mono text-gn-green-light">
-              NodeMini Hub
-            </span>
-          </div>
-
-          <div className="space-y-2.5">
-            <Input
-              label="Network SSID"
-              value={ssid}
-              onChange={(e) => setSsid(e.target.value)}
-              className="text-xs"
-            />
-            <Input
-              label="Wi-Fi Password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="text-xs"
-            />
-          </div>
-
-          <div className="flex items-center justify-between pt-1 text-[10px] text-gn-text-dim font-mono">
-            <span>Encrypted transmission</span>
-            <span className="text-gn-green-light font-semibold">Ready to pair</span>
-          </div>
-        </div>
+        <WifiCredentialsForm
+          ssid={ssid}
+          password={password}
+          onSsidChange={setSsid}
+          onPasswordChange={setPassword}
+          className="w-full max-w-xs mb-8"
+        />
       )}
 
       {/* Step number */}

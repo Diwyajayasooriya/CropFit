@@ -126,3 +126,77 @@ export interface ApiError {
   message: string;
   code?: string;
 }
+
+// ── Settings: Device ──
+export interface Subscription {
+  planId: "seedling" | "grower" | "harvest";
+  planName: string;
+  tier: string;
+  usage: { devices: number; deviceLimit: number; retentionDays: number; retentionLimitDays: number };
+}
+
+export interface Plan {
+  id: Subscription["planId"];
+  name: string;
+  priceLabel: string;
+  deviceLimit: number;
+  retentionDays: number;
+  features: string[];
+}
+
+export interface DeviceInfo {
+  id: string;
+  name: string;
+  model: string;
+  serial: string;
+  wifiSsid: string;
+  firmwareVersion: string;
+}
+
+export interface FirmwareStatus {
+  current: string;
+  latest: string;
+  updateAvailable: boolean;
+  state: "idle" | "downloading" | "installing" | "done";
+  progress: number;
+}
+
+export interface WifiPayload {
+  ssid: string;
+  password: string;
+}
+
+// ── Settings: Greenhouse ──
+export interface LayoutPin {
+  deviceId: string;
+  x: number; // 0..1, fraction of canvas width
+  y: number; // 0..1, fraction of canvas height
+}
+
+export interface GreenhouseLayout {
+  name: string;
+  lengthM: number;
+  widthM: number;
+  pins: LayoutPin[];
+  location: { lat: number; lng: number } | null;
+}
+
+export type TempUnit = "C" | "F";
+export type SystemUnit = "metric" | "imperial";
+
+// ── Settings: Automation ──
+export type ScheduleRecurrence =
+  | { kind: "once"; date: string }
+  | { kind: "recurring"; days: number[] }; // 0 = Sun … 6 = Sat
+
+export interface Schedule {
+  id: string;
+  actuatorId: string;
+  action: string;
+  time: string; // "HH:mm"
+  durationMin: number;
+  recurrence: ScheduleRecurrence;
+  enabled: boolean;
+}
+
+export type SchedulePayload = Omit<Schedule, "id">;

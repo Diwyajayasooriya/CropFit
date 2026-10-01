@@ -1,12 +1,15 @@
 "use client";
 
 import type { TargetCondition } from "@/api/types";
+import { useSettingsStore } from "@/store/settingsStore";
+import { convertReading } from "@/lib/units";
 
 interface TargetConditionsProps {
   conditions: TargetCondition[];
 }
 
 export default function TargetConditions({ conditions }: TargetConditionsProps) {
+  const { temp, system } = useSettingsStore();
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
@@ -20,7 +23,10 @@ export default function TargetConditions({ conditions }: TargetConditionsProps) 
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {conditions.map((item) => {
-          const diff = Number((item.target - item.current).toFixed(1));
+          const cur = convertReading(item.current, item.unit, { temp, system });
+          const tgt = convertReading(item.target, item.unit, { temp, system });
+          const unit = cur.unit;
+          const diff = Number((tgt.value - cur.value).toFixed(1));
           const isOptimal = Math.abs(diff) < 0.2;
           const isNeeded = diff > 0.2; // current is lower than target
 
@@ -35,13 +41,13 @@ export default function TargetConditions({ conditions }: TargetConditionsProps) 
 
               <div className="flex items-center gap-2">
                 <span className="font-mono text-gn-text-muted">
-                  {item.current}
-                  <span className="text-[10px] text-gn-text-dim ml-0.5">{item.unit}</span>
+                  {cur.value}
+                  <span className="text-[10px] text-gn-text-dim ml-0.5">{unit}</span>
                 </span>
                 <span className="text-gn-text-dim/40 text-[10px]">→</span>
                 <span className="font-mono text-gn-text font-semibold">
-                  {item.target}
-                  <span className="text-[10px] text-gn-text-dim ml-0.5">{item.unit}</span>
+                  {tgt.value}
+                  <span className="text-[10px] text-gn-text-dim ml-0.5">{unit}</span>
                 </span>
 
                 {/* Delta Badge */}
@@ -58,8 +64,8 @@ export default function TargetConditions({ conditions }: TargetConditionsProps) 
                   {isOptimal
                     ? "Optimal"
                     : isNeeded
-                    ? `+${diff} ${item.unit}`
-                    : `-${Math.abs(diff)} ${item.unit}`}
+                    ? `+${diff} ${unit}`
+                    : `-${Math.abs(diff)} ${unit}`}
                 </span>
               </div>
             </div>

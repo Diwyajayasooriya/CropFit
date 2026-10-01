@@ -1,11 +1,18 @@
 "use client";
 
+import { useEffect } from "react";
+import { useSettingsStore } from "@/store/settingsStore";
 import DashboardHeader from "@/components/dashboard/DashboardHeader";
 import DeviceManagementZone from "@/components/dashboard/DeviceManagementZone";
 import GreenhouseMonitorZone from "@/components/dashboard/GreenhouseMonitorZone";
 import ActionPanelZone from "@/components/dashboard/ActionPanelZone";
 
 export default function DashboardPage() {
+  const hydrateUnits = useSettingsStore((s) => s.hydrate);
+  useEffect(() => {
+    hydrateUnits();
+  }, [hydrateUnits]);
+
   return (
     <div className="min-h-screen bg-gn-surface text-gn-text flex flex-col">
       {/* Top Header — Logo, user profile & action menu */}
