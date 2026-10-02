@@ -8,21 +8,23 @@ from apps.conditions.serializers import (
     BulkSyncRequestSerializer,
 )
 from apps.node.models.nodeDetails.models import Node
-from config import permissions
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from apps.authentication.Permitions.permissions import IsFarmer
+from config.permissions import HasEdgeSyncToken
 
 
 class ConditionViewSet(viewsets.ModelViewSet):
     """CRUD API for condition thresholds."""
     queryset = Condition.objects.all().order_by('-timeStamp')
     serializer_class = ConditionSerializer
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [IsFarmer]
 
 
 class ConditionReadingViewSet(viewsets.ReadOnlyModelViewSet):
     """Read-only viewset for telemetry history."""
     queryset = ConditionReading.objects.all().order_by('-reading_ts')
     serializer_class = ConditionReadingSerializer
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [IsFarmer]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -46,7 +48,7 @@ class BulkSyncView(APIView):
     Receives batch of sensor telemetry readings from Raspberry Pi edge nodes.
     Uses bulk_create for optimal SQL insertion performance.
     """
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [HasEdgeSyncToken]
 
     def post(self, request):
         serializer = BulkSyncRequestSerializer(data=request.data)
