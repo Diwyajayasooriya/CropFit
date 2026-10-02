@@ -10,6 +10,7 @@ class UserProfile(models.Model):
     )
     # Role is now handled in the User model to avoid redundancy.
     # Add other profile specific fields here (e.g., bio, address)
+    onboarding_completed = models.BooleanField(default=False)
 
     def __str__(self):
-        return f"{self.user.username} - Profile"
+        return f"{self.user.username} - Profile"
