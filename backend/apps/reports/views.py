@@ -101,43 +101,96 @@ class DashboardSummaryView(APIView):
     """
     GET /api/v1/reports/dashboard/
     Combines latest metrics and actuator states for the frontend dashboard.
+    Conforms strictly to frontend DashboardSummary interface with tenant greenhouse isolation.
     """
     permission_classes = [IsFarmer]
 
     def get(self, request):
-        # 1. Get latest readings for tiles
-        latest_readings = ConditionReading.objects.order_by('-reading_ts')[:5]
+        user = request.user
+        greenhouse_id = request.query_params.get('greenhouse')
+
+        # Greenhouse isolation: Admins see all; farmers see their own
+        if getattr(user, 'role', '') == 'admin' or user.is_staff:
+            greenhouses = GreenHouse.objects.all()
+            if greenhouse_id:
+                greenhouses = greenhouses.filter(id=greenhouse_id)
+        else:
+            greenhouses = GreenHouse.objects.filter(user=user)
+            if greenhouse_id:
+                greenhouses = greenhouses.filter(id=greenhouse_id)
+
+        from apps.node.models.nodeDetails.models import Node
+        from apps.node.models.actuators.models import Actuator
+
+        nodes = Node.objects.filter(greenHouse__in=greenhouses)
+        
+        # 1. Fetch latest reading
+        latest = ConditionReading.objects.filter(node__in=nodes).order_by('-reading_ts').first()
+
         tiles = []
-        for r in latest_readings:
-            tiles.append({
-                "sensor_id": f"SN-{r.id}",
-                "label": "Temperature" if r.temperature else "Humidity",
-                "value": float(r.temperature or r.humidity or 0),
-                "unit": "°C" if r.temperature else "%",
-                "kind": "temperature" if r.temperature else "humidity",
-                "updated_at": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(r.reading_ts))
+        if latest:
+            ts_iso = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(latest.reading_ts))
+            if latest.temperature is not None:
+                tiles.append({
+                    "sensor_id": f"temp-{latest.device_id}",
+                    "sensor_name": "Ambient Temperature",
+                    "sensor_kind": "temperature",
+                    "value": round(float(latest.temperature), 1),
+                    "unit": "°C",
+                    "status": "online",
+                    "trend": "stable",
+                    "updated_at": ts_iso
+                })
+            if latest.humidity is not None:
+                tiles.append({
+                    "sensor_id": f"hum-{latest.device_id}",
+                    "sensor_name": "Relative Humidity",
+                    "sensor_kind": "humidity",
+                    "value": round(float(latest.humidity), 1),
+                    "unit": "%",
+                    "status": "online",
+                    "trend": "stable",
+                    "updated_at": ts_iso
+                })
+            if latest.soil_moisture is not None:
+                tiles.append({
+                    "sensor_id": f"soil-{latest.device_id}",
+                    "sensor_name": "Soil Moisture",
+                    "sensor_kind": "soil_moisture",
+                    "value": round(float(latest.soil_moisture), 1),
+                    "unit": "%",
+                    "status": "online",
+                    "trend": "stable",
+                    "updated_at": ts_iso
+                })
+
+        # 2. Fetch actuators
+        actuators = []
+        for a in Actuator.objects.filter(node__in=nodes):
+            kind = a.actuator_type.lower()
+            if kind not in ['pump', 'fan', 'vent', 'light', 'heater']:
+                kind = 'pump'
+            actuators.append({
+                "actuator_id": a.actuator_id,
+                "name": f"{a.actuator_type.title()} ({a.actuator_id})",
+                "actuator_kind": kind,
+                "is_active": bool(a.is_active),
+                "auto_mode": True,
+                "status": "online" if getattr(a.node, 'is_claimed', False) else "offline",
             })
 
-        # 2. Get actuators
-        actuators_qs = Device.objects.filter(device_type='actuator')
-        actuators = [{
-            "actuator_id": a.device_id,
-            "name": a.name,
-            "is_active": a.is_online, # Mapping online status to active for simplicity
-            "kind": "relay"
-        } for a in actuators_qs]
-
-        # 3. Overall status
-        active_alerts = Alert.objects.filter(is_resolved=False).count()
-        status_msg = "System Healthy. All conditions within optimal range."
-        overall_status = "healthy"
+        # 3. Overall status & active alerts
+        active_alerts = Alert.objects.filter(greenhouse__in=greenhouses, is_resolved=False).count()
         if active_alerts > 0:
-            status_msg = f"System Warning. {active_alerts} active alerts detected."
+            status_msg = f"System Warning: {active_alerts} active alert(s) detected."
             overall_status = "warning"
+        else:
+            status_msg = "System Healthy. All conditions within optimal range."
+            overall_status = "healthy"
 
         return Response({
             "message": status_msg,
             "overall_status": overall_status,
             "tiles": tiles,
             "actuators": actuators
-        })
+        }, status=status.HTTP_200_OK)

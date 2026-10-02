@@ -52,21 +52,25 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'corsheaders',
     'rest_framework',
+    'rest_framework_simplejwt.token_blacklist',
     'apps.authentication.apps.AuthenticationConfig',
-'apps.alerts.apps.AlertsConfig',
-'apps.devices.apps.DevicesConfig',
-'apps.rules.apps.RulesConfig',
-'apps.zone.apps.ZoneConfig',
-'apps.sensorHistory.apps.SensorhistoryConfig',
-'apps.greenhouses.apps.GreenhousesConfig',
-'apps.reports.apps.ReportsConfig',
-'apps.node.apps.NodeConfig',
-'apps.conditions.apps.ConditionsConfig',
+    'apps.alerts.apps.AlertsConfig',
+    'apps.devices.apps.DevicesConfig',
+    'apps.rules.apps.RulesConfig',
+    'apps.zone.apps.ZoneConfig',
+    'apps.sensorHistory.apps.SensorhistoryConfig',
+    'apps.greenhouses.apps.GreenhousesConfig',
+    'apps.reports.apps.ReportsConfig',
+    'apps.node.apps.NodeConfig',
+    'apps.conditions.apps.ConditionsConfig',
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
+    'config.admin_ip_middleware.AdminIPRestrictionMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -169,3 +173,16 @@ SIMPLE_JWT = {
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
 }
+
+# Cross-Origin Resource Sharing (CORS) Configuration
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+CORS_ALLOW_CREDENTIALS = True
+if DEBUG:
+    CORS_ALLOW_ALL_ORIGINS = True
+
+# Django Admin IP Restriction Configuration
+# Comma-separated list of IPs allowed to access /admin/ (e.g. "127.0.0.1,::1,localhost")
+ADMIN_ALLOWED_IPS = os.getenv("ADMIN_ALLOWED_IPS", "127.0.0.1,::1,localhost,127.0.0.1:8000")
