@@ -2,7 +2,7 @@ from django.urls import path
 from rest_framework_simplejwt.views import (
     TokenRefreshView,
 )
-from .services.LoginService import RegistrationView, UserMeView
+from .services.LoginService import RegistrationView, UserMeView, OnboardingStatusView
 from .login.views import CustomTokenObtainPairView, AdminTokenObtainPairView
 
 urlpatterns = [
@@ -14,4 +14,5 @@ urlpatterns = [
     # get refreshToken
     path("token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("me/", UserMeView.as_view(), name="me"),
-]
+    path("onboarding-status/", OnboardingStatusView.as_view(), name="onboarding-status"),
+]
