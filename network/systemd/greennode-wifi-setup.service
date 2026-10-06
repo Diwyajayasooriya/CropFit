@@ -1,0 +1,24 @@
+[Unit]
+Description=GreenNode first-boot WiFi setup (Balena WiFi Connect captive portal)
+# Runs BEFORE any GreenNode production service. If WiFi is already
+# configured, wifi-connect exits instantly (< 1s) and everything else
+# starts normally. If not, it blocks until the farmer finishes the portal.
+Before=greennode-claim.service hostapd.service
+After=NetworkManager.service
+Wants=NetworkManager.service
+# Don't start if the Pi has already been claimed and switched to dhcpcd.
+# This unit is disabled by the post-setup transition script; the
+# ConditionPathExists is a safety net so it never runs after that.
+ConditionPathExists=!/etc/greennode/setup-complete
+
+[Service]
+Type=simple
+ExecStart=/bin/bash /opt/greennode-network/scripts/greennode-wifi-setup.sh
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=660
+# Run as root — wifi-connect needs it for network control
+User=root
+
+[Install]
+WantedBy=multi-user.target

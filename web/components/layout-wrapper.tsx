@@ -12,11 +12,12 @@ import { AppShell } from './app-shell';
 
 export function LayoutWrapper({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const isStandalone = pathname === '/login' || pathname.startsWith('/admin');
+  const isStandalone = pathname === '/login' || pathname === '/onboarding' || pathname.startsWith('/admin');
 
   if (isStandalone) {
     return <>{children}</>;
   }
+
 
   return <AppShell>{children}</AppShell>;
 }

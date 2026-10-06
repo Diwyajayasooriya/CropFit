@@ -15,7 +15,10 @@ export interface User {
   last_name: string;
   role: UserRole;
   avatar_url?: string;
+  onboarding_completed?: boolean;
+  onboarding_step?: 'CREATE_GREENHOUSE' | 'CLAIM_HUB' | 'CONFIGURE_DEVICES' | 'COMPLETED';
 }
+
 
 export interface AuthTokens {
   access: string;

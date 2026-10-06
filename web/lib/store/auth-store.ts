@@ -16,6 +16,7 @@ interface AuthState {
   error: string | null;
 
   login: (credentials: LoginCredentials) => Promise<void>;
+  loginAdmin: (credentials: LoginCredentials) => Promise<void>;
   loginDemo: (role?: UserRole) => void;
   switchRole: (role: UserRole) => void;
   logout: () => void;
@@ -36,10 +37,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
-      // 1. Call Django simplejwt token endpoint
+      // 1. Call Django simplejwt token endpoint (Farmer login)
       const tokens = await api<AuthTokens>('/auth/token/', {
         method: 'POST',
-        body: credentials,
+        body: {
+          username: credentials.email,
+          email: credentials.email,
+          password: credentials.password,
+        },
         auth: false,
       });
 
@@ -47,32 +52,59 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
       // 2. Fetch user profile from DRF auth/me
       const user = await api<User>('/auth/me/');
+      setTokens(tokens, user.role);
+
       if (typeof window !== 'undefined') {
         localStorage.setItem('cropfit_user', JSON.stringify(user));
       }
 
-      set({ user, isAuthenticated: true, isLoading: false });
-    } catch (err) {
-      // In dev / standalone prototype mode, if backend is offline or credentials match demo
-      console.warn('[Auth] Backend unreachable or credentials demo fallback:', err);
-      
-      // If user typed demo credentials or wants fallback
-      let matchedRole: UserRole = 'farmer';
-      if (credentials.email.includes('admin')) matchedRole = 'admin';
-      else if (credentials.email.includes('tech')) matchedRole = 'technician';
+      set({ user, isAuthenticated: true, isLoading: false, error: null });
+    } catch (err: unknown) {
+      console.error('[Auth] Login failed:', err);
+      const message = err instanceof Error ? err.message : 'Invalid credentials or server unavailable.';
+      clearTokens();
+      set({ user: null, isAuthenticated: false, isLoading: false, error: message });
+      throw err;
+    }
+  },
 
-      const demoUser = mockUsersByRole[matchedRole];
-      const fakeTokens: AuthTokens = {
-        access: `mock-access-token-${matchedRole}`,
-        refresh: `mock-refresh-token-${matchedRole}`,
-      };
+  loginAdmin: async (credentials: LoginCredentials) => {
+    set({ isLoading: true, error: null });
 
-      setTokens(fakeTokens);
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('cropfit_user', JSON.stringify(demoUser));
+    try {
+      // 1. Call secure Admin SimpleJWT token endpoint
+      const tokens = await api<AuthTokens>('/auth/admin/token/', {
+        method: 'POST',
+        body: {
+          username: credentials.email,
+          email: credentials.email,
+          password: credentials.password,
+        },
+        auth: false,
+      });
+
+      setTokens(tokens, 'admin');
+
+      // 2. Fetch user profile and verify clearance
+      const user = await api<User>('/auth/me/');
+      if (user.role !== 'admin') {
+        clearTokens();
+        throw new Error('Access Denied: Account lacks administrative clearance.');
       }
 
-      set({ user: demoUser, isAuthenticated: true, isLoading: false });
+      setTokens(tokens, 'admin');
+
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('cropfit_user', JSON.stringify(user));
+      }
+
+      set({ user, isAuthenticated: true, isLoading: false, error: null });
+    } catch (err: unknown) {
+      console.error('[Auth] Admin Login failed:', err);
+      const message = err instanceof Error ? err.message : 'Invalid administrator credentials.';
+      clearTokens();
+      set({ user: null, isAuthenticated: false, isLoading: false, error: message });
+      throw err;
     }
   },
 
@@ -82,7 +114,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       access: `mock-access-token-${role}`,
       refresh: `mock-refresh-token-${role}`,
     };
-    setTokens(fakeTokens);
+    setTokens(fakeTokens, role);
     if (typeof window !== 'undefined') {
       localStorage.setItem('cropfit_user', JSON.stringify(demoUser));
     }
