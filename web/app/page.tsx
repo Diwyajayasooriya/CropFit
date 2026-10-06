@@ -12,6 +12,7 @@ import { useDashboardStore } from '@/lib/store/dashboard-store';
 import { useAuthStore } from '@/lib/store/auth-store';
 import { toast } from '@/lib/store/toast-store';
 import { DashboardSkeleton } from '@/components/skeletons';
+import { useRouter } from 'next/navigation';
 import {
   DevicesIcon,
   RulesIcon,
@@ -21,12 +22,18 @@ import {
 } from '@/components/icons';
 
 export default function DashboardPage() {
+  const router = useRouter();
   const { summary, isLoading, fetchDashboard, updateActuator } = useDashboardStore();
-  const { user } = useAuthStore();
+  const { user, isAuthenticated, isLoading: authLoading } = useAuthStore();
 
   useEffect(() => {
+    if (!authLoading && isAuthenticated && user && user.onboarding_completed === false) {
+      router.replace('/onboarding');
+      return;
+    }
     fetchDashboard();
-  }, [fetchDashboard]);
+  }, [user, isAuthenticated, authLoading, fetchDashboard, router]);
+
 
   const handleToggleActuator = (id: string, name: string, currentState: boolean) => {
     // Restricted action for Farmer

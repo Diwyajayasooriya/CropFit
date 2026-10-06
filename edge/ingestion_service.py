@@ -54,15 +54,7 @@ Session = sessionmaker(bind=engine)
 # --- Allowlist check ------------------------------------------------------
 
 def is_device_allowed(session, device_id: str) -> bool:
-    """
-    Defense in depth: the MQTT broker's ACL should already stop a device
-    from publishing to a topic that isn't its own, but this is a second,
-    independent check against `connected_devices` — catches a
-    revoked-but-not-yet-ACL-updated device, and makes the allowlist the
-    single source of truth for "is this device trusted" rather than
-    splitting that decision across two systems that could drift out of
-    sync.
-    """
+
     device = session.execute(
         select(ConnectedDevice).where(
             ConnectedDevice.device_id == device_id,

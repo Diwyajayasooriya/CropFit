@@ -1,0 +1,17 @@
+[Unit]
+Description=GreenNode Edge Hub QR Claim Polling Service
+After=network-online.target greennode-wifi-setup.service
+Wants=network-online.target
+ConditionPathExists=!/etc/greennode/claimed
+
+[Service]
+Type=simple
+User=root
+ExecStart=/bin/bash /opt/greennode/network/scripts/greennode-claim.sh
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

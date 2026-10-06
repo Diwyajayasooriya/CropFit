@@ -14,6 +14,7 @@ import type {
 import { CropFitWebSocket, createWebSocket } from '@/lib/websocket';
 import { apiFetch } from '@/lib/api';
 import { mockDashboard } from '@/lib/mock-data';
+import { toast } from '@/lib/store/toast-store';
 
 interface DashboardState {
   summary: DashboardSummary | null;

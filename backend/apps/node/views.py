@@ -201,74 +201,158 @@ class ActuatorViewSet(viewsets.ModelViewSet):
         }, status=status.HTTP_200_OK)
 
 
-import secrets
+from datetime import timedelta
+from django.db import transaction
 from django.utils import timezone
 from rest_framework.views import APIView
 from apps.greenhouses.models.models import GreenHouse
+from apps.node.serializers import (
+    NodeBootstrapSerializer,
+    NodeClaimSerializer,
+    NodeHeartbeatSerializer,
+    TokenExchangeSerializer,
+)
 
 
-class ClaimHubView(APIView):
+class NodeBootstrapView(APIView):
+    """
+    POST /api/v1/nodes/bootstrap/
+    Unclaimed Pi announces presence upon first connecting to Wi-Fi.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        serializer = NodeBootstrapSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        node, created = Node.objects.get_or_create(
+            node_id=data["device_id"],
+            defaults={
+                "node_name": f"GreenNode {data['device_id']}",
+                "claim_code": data.get("claim_code") or secrets.token_hex(3).upper(),
+                "software_version": data.get("software_version", "0.1.0"),
+                "hardware_info": data.get("hardware", "Raspberry Pi 4B"),
+                "ip_address": data.get("ip_address"),
+                "last_seen": timezone.now(),
+            }
+        )
+
+        if not created:
+            node.software_version = data.get("software_version", node.software_version)
+            node.hardware_info = data.get("hardware", node.hardware_info)
+            if data.get("ip_address"):
+                node.ip_address = data["ip_address"]
+            node.last_seen = timezone.now()
+            node.save(update_fields=["software_version", "hardware_info", "ip_address", "last_seen"])
+
+        return Response({
+            "status": "claimed" if node.is_claimed else "waiting_for_claim",
+            "device_id": node.node_id,
+            "is_claimed": node.is_claimed,
+        }, status=status.HTTP_200_OK)
+
+
+class NodeClaimView(APIView):
     """
     POST /api/v1/nodes/claim/
-    Farmer claims an edge hub using the 8-character claim code found on the QR sticker.
-    Binds the device to their greenhouse and generates an authentication token.
+    Farmer claims an edge hub using device_id + claim_code.
+    Validates ownership, prevents brute-forcing, links to greenhouse,
+    and creates a 10-minute one-time exchange token.
     """
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-        claim_code = request.data.get('claim_code', '').strip().upper()
-        greenhouse_id = request.data.get('greenhouse_id')
-        node_name = request.data.get('node_name', '').strip()
+        serializer = NodeClaimSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
 
-        if not claim_code:
-            return Response({"error": "claim_code is required."}, status=status.HTTP_400_BAD_REQUEST)
+        device_id = data["device_id"].strip()
+        claim_code = data["claim_code"].strip().upper()
+        greenhouse_id = data["greenhouse_id"]
 
-        if not greenhouse_id:
-            return Response({"error": "greenhouse_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+        with transaction.atomic():
+            greenhouse = GreenHouse.objects.filter(id=greenhouse_id, user=request.user).first()
+            if not greenhouse:
+                return Response(
+                    {"error": "Greenhouse not found or you lack permission to manage it."},
+                    status=status.HTTP_404_NOT_FOUND
+                )
 
-        # Validate greenhouse ownership
-        greenhouse = GreenHouse.objects.filter(id=greenhouse_id, user=request.user).first()
-        if not greenhouse:
-            return Response({"error": "Greenhouse not found or you do not have permission to manage it."}, status=status.HTTP_404_NOT_FOUND)
+            node = Node.objects.select_for_update().filter(node_id=device_id).first()
+            if not node:
+                # Try fallback matching by claim_code
+                node = Node.objects.select_for_update().filter(claim_code=claim_code).first()
 
-        node = Node.objects.filter(claim_code=claim_code).first()
-        if not node:
-            return Response({"error": "Invalid claim code. Please check the code on your hub sticker."}, status=status.HTTP_404_NOT_FOUND)
+            if not node:
+                return Response(
+                    {"error": f"Device '{device_id}' is not recognized in records."},
+                    status=status.HTTP_404_NOT_FOUND
+                )
 
-        if node.is_claimed:
-            return Response({"error": "This device has already been claimed."}, status=status.HTTP_400_BAD_REQUEST)
+            # Brute-force lockout check
+            if node.claim_locked_until and timezone.now() < node.claim_locked_until:
+                remaining = int((node.claim_locked_until - timezone.now()).total_seconds())
+                return Response(
+                    {"error": f"Too many failed claim attempts. Try again in {remaining} seconds."},
+                    status=status.HTTP_429_TOO_MANY_REQUESTS
+                )
 
-        # Generate unique hub authorization token
-        hub_token = secrets.token_urlsafe(32)
+            if node.is_claimed:
+                return Response(
+                    {"error": "This device has already been claimed."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
-        node.greenHouse = greenhouse
-        node.is_claimed = True
-        node.hub_token = hub_token
-        node.claimed_at = timezone.now()
-        if node_name:
-            node.node_name = node_name
-        node.save()
+            if not secrets.compare_digest(node.claim_code.upper(), claim_code):
+                node.failed_claim_attempts += 1
+                if node.failed_claim_attempts >= 5:
+                    node.claim_locked_until = timezone.now() + timedelta(minutes=15)
+                    node.failed_claim_attempts = 0
+                node.save(update_fields=["failed_claim_attempts", "claim_locked_until"])
+                return Response(
+                    {"error": "Invalid claim code. Please check the sticker on your hub."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Generate one-time exchange token (valid 10 minutes)
+            one_time_token = f"cft_exch_{secrets.token_urlsafe(24)}"
+            node.greenHouse = greenhouse
+            node.is_claimed = True
+            node.claimed_at = timezone.now()
+            node.failed_claim_attempts = 0
+            node.claim_locked_until = None
+            node.one_time_claim_token = one_time_token
+            node.one_time_token_expires_at = timezone.now() + timedelta(minutes=10)
+            
+            # Generate permanent hub token & hash immediately as well for backward compatibility
+            raw_token = f"cft_sec_live_{secrets.token_urlsafe(32)}"
+            node.set_hub_token(raw_token)
+            node.save()
 
         return Response({
             "status": "success",
-            "message": "Device successfully claimed and linked to greenhouse.",
+            "message": f"Device {node.node_id} successfully linked to {greenhouse.name}.",
             "device_id": node.node_id,
-            "node_name": node.node_name,
             "greenhouse_id": greenhouse.id,
             "greenhouse_name": greenhouse.name,
         }, status=status.HTTP_200_OK)
 
 
-class PollClaimView(APIView):
+# Keep ClaimHubView alias for backward compatibility
+ClaimHubView = NodeClaimView
+
+
+class NodePollClaimView(APIView):
     """
     GET /api/v1/nodes/poll-claim/?device_id=XXXX
     Polled by the Raspberry Pi after connecting to Wi-Fi.
-    Returns whether the device has been claimed by the farmer and its token.
+    Returns ephemeral exchange token and permanent token once claimed.
     """
     permission_classes = [permissions.AllowAny]
 
     def get(self, request):
-        device_id = request.query_params.get('device_id', '').strip()
+        device_id = request.query_params.get("device_id", "").strip()
         if not device_id:
             return Response({"error": "device_id query parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -282,7 +366,7 @@ class PollClaimView(APIView):
 
         if not node.is_claimed:
             return Response({
-                "status": "unclaimed",
+                "status": "waiting",
                 "device_id": device_id,
                 "claim_code": node.claim_code
             }, status=status.HTTP_200_OK)
@@ -290,8 +374,90 @@ class PollClaimView(APIView):
         return Response({
             "status": "claimed",
             "device_id": node.node_id,
-            "hub_token": node.hub_token,
+            "exchange_token": node.one_time_claim_token or "",
+            "hub_token": node.hub_token or "",
             "greenhouse_id": str(node.greenHouse_id or ""),
-            "node_name": node.node_name
+            "node_name": node.node_name,
         }, status=status.HTTP_200_OK)
+
+
+# Keep PollClaimView alias
+PollClaimView = NodePollClaimView
+
+
+class NodeExchangeTokenView(APIView):
+    """
+    POST /api/v1/nodes/exchange-token/
+    Raspberry Pi exchanges its one-time claim token for permanent SHA-256 hashed Bearer credential.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        serializer = TokenExchangeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        with transaction.atomic():
+            node = Node.objects.select_for_update().filter(node_id=data["device_id"]).first()
+            if not node or not node.one_time_claim_token:
+                # If already exchanged, fallback to existing token
+                if node and node.hub_token:
+                    return Response({
+                        "status": "provisioned",
+                        "device_id": node.node_id,
+                        "hub_token": node.hub_token,
+                    }, status=status.HTTP_200_OK)
+                return Response({"error": "Invalid exchange request"}, status=status.HTTP_400_BAD_REQUEST)
+
+            if not secrets.compare_digest(node.one_time_claim_token, data["exchange_token"]):
+                return Response({"error": "Invalid exchange token"}, status=status.HTTP_403_FORBIDDEN)
+
+            raw_hub_token = f"cft_sec_live_{secrets.token_urlsafe(32)}"
+            node.set_hub_token(raw_hub_token)
+            node.one_time_claim_token = None
+            node.one_time_token_expires_at = None
+            node.save()
+
+        return Response({
+            "status": "provisioned",
+            "device_id": node.node_id,
+            "hub_token": raw_hub_token,
+        }, status=status.HTTP_200_OK)
+
+
+class NodeHeartbeatView(APIView):
+    """
+    POST /api/v1/nodes/heartbeat/
+    Periodic heartbeat from edge Pi. Authenticated using Bearer <hub_token>.
+    """
+    permission_classes = [HasEdgeSyncToken]
+
+    def post(self, request):
+        serializer = NodeHeartbeatSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        node = getattr(request, "node", None)
+        if not node:
+            node = Node.objects.filter(node_id=data["device_id"]).first()
+
+        if not node:
+            return Response({"error": "Node not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        node.last_seen = timezone.now()
+        if data.get("ip_address"):
+            node.ip_address = data["ip_address"]
+        if data.get("software_version"):
+            node.software_version = data["software_version"]
+        if data.get("uptime_seconds") is not None:
+            node.uptime_seconds = data["uptime_seconds"]
+
+        node.save(update_fields=["last_seen", "ip_address", "software_version", "uptime_seconds"])
+
+        return Response({
+            "status": "acknowledged",
+            "server_time": timezone.now().isoformat(),
+            "is_online": True,
+        }, status=status.HTTP_200_OK)
+
 

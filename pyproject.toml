@@ -17,4 +17,8 @@ dependencies = [
     "python-dotenv>=1.0",
     "djangorestframework-stubs>=3.18.1",
     "sqlalchemy>=2.0.54",
+    "paho-mqtt>=2.1.0",
+    "numpy>=2.5.3",
+    "onnxruntime>=1.30.0",
+    "fastapi>=0.142.2",
 ]
