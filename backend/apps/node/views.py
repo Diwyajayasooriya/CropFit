@@ -1,6 +1,7 @@
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+import secrets
 
 from apps.node.models.nodeDetails.models import Node
 from apps.node.models.actuators.models import Actuator
@@ -13,6 +14,7 @@ from apps.authentication.Permitions.permissions import IsAdmin, IsFarmer, IsTech
 
 from config.permissions import HasEdgeSyncToken
 from apps.greenhouses.models.models import GreenHouse
+from apps.node.commands import enqueue_command, expire_commands, command_data
 
 
 class NodeViewSet(viewsets.ModelViewSet):
@@ -54,7 +56,7 @@ class NodeViewSet(viewsets.ModelViewSet):
         serializer = ActuatorSerializer(actuators, many=True)
         return Response(serializer.data)
 
-    @action(detail=False, methods=['get'], url_path='config')
+    @action(detail=False, methods=['get'], url_path='config', authentication_classes=[])
     def config(self, request):
         """
         GET /api/v1/nodes/config/?node_id=GN-HUB-001
@@ -65,16 +67,13 @@ class NodeViewSet(viewsets.ModelViewSet):
         node_id = request.query_params.get("node_id", "").strip()
         node = None
 
-        if auth_header.startswith("Bearer "):
-            token = auth_header.removeprefix("Bearer ").strip()
-            node = Node.objects.filter(hub_token=token, is_claimed=True).first()
+        if auth_header.startswith("Bearer ") and HasEdgeSyncToken().has_permission(request, self):
+            node = getattr(request, 'node', None)
 
         if not node and node_id:
             # If farmer is logged in, verify ownership
             if request.user.is_authenticated:
                 node = Node.objects.filter(node_id=node_id, greenHouse__user=request.user).first()
-            else:
-                node = Node.objects.filter(node_id=node_id).first()
 
         if not node:
             return Response(
@@ -178,27 +177,26 @@ class ActuatorViewSet(viewsets.ModelViewSet):
         # Lookup by PK or actuator_id
         actuator = None
         if str(pk).isdigit():
-            actuator = Actuator.objects.filter(id=int(pk)).first()
+            actuator = self.get_queryset().filter(id=int(pk)).first()
         if not actuator:
-            actuator = Actuator.objects.filter(actuator_id=pk).first()
+            actuator = self.get_queryset().filter(actuator_id=pk).first()
 
         if not actuator:
             return Response({"error": f"Actuator '{pk}' not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        action_cmd = request.data.get('action', '').upper()
+        action_cmd = str(request.data.get('action', '')).upper()
         if action_cmd not in ['ON', 'OFF']:
             return Response({"error": "Payload must include action: 'ON' or 'OFF'"}, status=status.HTTP_400_BAD_REQUEST)
 
-        actuator.is_active = (action_cmd == 'ON')
-        actuator.save(update_fields=['is_active'])
+        return enqueue_command(actuator, action_cmd)
 
-        return Response({
-            "status": "success",
-            "actuator_id": actuator.actuator_id,
-            "is_active": actuator.is_active,
-            "action": action_cmd,
-            "message": f"Actuator {actuator.actuator_id} successfully set to {action_cmd}."
-        }, status=status.HTTP_200_OK)
+    @action(detail=True, methods=['get'], url_path='command-status')
+    def command_status(self, request, pk=None):
+        actuator = self.get_object()
+        expire_commands(actuator.commands.all())
+        command = actuator.commands.order_by('-created_at').first()
+        return Response({'command': command_data(command) if command else None,
+                         'is_active': actuator.is_active, 'confirmed_at': actuator.confirmed_at})
 
 
 from datetime import timedelta
@@ -294,7 +292,8 @@ class NodeClaimView(APIView):
             if node.claim_locked_until and timezone.now() < node.claim_locked_until:
                 remaining = int((node.claim_locked_until - timezone.now()).total_seconds())
                 return Response(
-                    {"error": f"Too many failed claim attempts. Try again in {remaining} seconds."},
+                    {"error": f"Too many failed claim attempts. Try again in {remaining} seconds.",
+                     "retry_after_seconds": max(1, remaining)},
                     status=status.HTTP_429_TOO_MANY_REQUESTS
                 )
 
@@ -431,6 +430,7 @@ class NodeHeartbeatView(APIView):
     Periodic heartbeat from edge Pi. Authenticated using Bearer <hub_token>.
     """
     permission_classes = [HasEdgeSyncToken]
+    authentication_classes = []
 
     def post(self, request):
         serializer = NodeHeartbeatSerializer(data=request.data)
@@ -459,5 +459,3 @@ class NodeHeartbeatView(APIView):
             "server_time": timezone.now().isoformat(),
             "is_online": True,
         }, status=status.HTTP_200_OK)
-
-

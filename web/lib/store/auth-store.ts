@@ -42,7 +42,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         method: 'POST',
         body: {
           username: credentials.email,
-          email: credentials.email,
           password: credentials.password,
         },
         auth: false,
@@ -77,7 +76,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         method: 'POST',
         body: {
           username: credentials.email,
-          email: credentials.email,
           password: credentials.password,
         },
         auth: false,
@@ -109,6 +107,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   loginDemo: (role: UserRole = 'farmer') => {
+    if (process.env.NODE_ENV !== 'development') return;
     const demoUser = mockUsersByRole[role];
     const fakeTokens: AuthTokens = {
       access: `mock-access-token-${role}`,
@@ -122,6 +121,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   switchRole: (role: UserRole) => {
+    if (process.env.NODE_ENV !== 'development') return;
     const updated = mockUsersByRole[role];
     if (typeof window !== 'undefined') {
       localStorage.setItem('cropfit_user', JSON.stringify(updated));
@@ -138,43 +138,18 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ user: null, isAuthenticated: false, error: null });
   },
 
-  hydrate: () => {
-    if (typeof window === 'undefined') {
-      set({ isLoading: false });
-      return;
-    }
-
-    const tokens = getTokens();
-    const storedUserRaw = localStorage.getItem('cropfit_user');
-
-    if (tokens?.access) {
-      if (storedUserRaw) {
-        try {
-          const parsedUser = JSON.parse(storedUserRaw) as User;
-          set({ user: parsedUser, isAuthenticated: true, isLoading: false });
-          return;
-        } catch {
-          // fall through
-        }
+  hydrate: async () => {
+    if (typeof window === 'undefined') return;
+    try {
+      if (!getTokens()?.access) {
+        set({ user: null, isAuthenticated: false, isLoading: false });
+        return;
       }
-
-      // Try decoding user from JWT payload
-      try {
-        const payload = JSON.parse(atob(tokens.access.split('.')[1]));
-        const user: User = {
-          id: payload.user_id ?? 1,
-          email: payload.email ?? 'user@cropfit.io',
-          first_name: payload.first_name ?? 'Farmer',
-          last_name: payload.last_name ?? '',
-          role: payload.role ?? 'farmer',
-        };
-        set({ user, isAuthenticated: true, isLoading: false });
-      } catch {
-        // Fallback to default farmer demo user
-        const defaultUser = mockUsersByRole.farmer;
-        set({ user: defaultUser, isAuthenticated: true, isLoading: false });
-      }
-    } else {
+      const user = await api<User>('/auth/me/');
+      localStorage.setItem('cropfit_user', JSON.stringify(user));
+      set({ user, isAuthenticated: true, isLoading: false });
+    } catch {
+      clearTokens();
       set({ user: null, isAuthenticated: false, isLoading: false });
     }
   },

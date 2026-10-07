@@ -27,6 +27,10 @@ class ReportSummaryView(APIView):
 
         # Base query for readings within time window
         readings_qs = ConditionReading.objects.filter(reading_ts__gte=cutoff_ts)
+        user = request.user
+        is_admin = user.is_superuser or getattr(user, 'role', '') == 'admin'
+        if not is_admin:
+            readings_qs = readings_qs.filter(node__greenHouse__user=user)
         if greenhouse_id:
             readings_qs = readings_qs.filter(node__greenHouse_id=greenhouse_id)
 
@@ -46,6 +50,8 @@ class ReportSummaryView(APIView):
 
         # Alert stats
         alerts_qs = Alert.objects.all()
+        if not is_admin:
+            alerts_qs = alerts_qs.filter(greenhouse__user=user)
         if greenhouse_id:
             alerts_qs = alerts_qs.filter(greenhouse_id=greenhouse_id)
 
@@ -54,6 +60,8 @@ class ReportSummaryView(APIView):
 
         # Device stats
         devices_qs = Device.objects.all()
+        if not is_admin:
+            devices_qs = devices_qs.filter(node__greenHouse__user=user)
         if greenhouse_id:
             devices_qs = devices_qs.filter(node__greenHouse_id=greenhouse_id)
 
@@ -110,7 +118,7 @@ class DashboardSummaryView(APIView):
         greenhouse_id = request.query_params.get('greenhouse')
 
         # Greenhouse isolation: Admins see all; farmers see their own
-        if getattr(user, 'role', '') == 'admin' or user.is_staff:
+        if getattr(user, 'role', '') == 'admin' or user.is_superuser:
             greenhouses = GreenHouse.objects.all()
             if greenhouse_id:
                 greenhouses = greenhouses.filter(id=greenhouse_id)
@@ -124,44 +132,36 @@ class DashboardSummaryView(APIView):
 
         nodes = Node.objects.filter(greenHouse__in=greenhouses)
         
-        # 1. Fetch latest reading
-        latest = ConditionReading.objects.filter(node__in=nodes).order_by('-reading_ts').first()
-
+        # Latest two samples per device. A trend requires two real measurements.
         tiles = []
-        if latest:
-            ts_iso = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(latest.reading_ts))
-            if latest.temperature is not None:
+        readings = ConditionReading.objects.filter(node__in=nodes)
+        devices = readings.order_by().values_list('node_id', 'device_id').distinct()
+        metrics = [
+            ('temperature', 'temp', 'Ambient Temperature', '°C'),
+            ('humidity', 'hum', 'Relative Humidity', '%'),
+            ('soil_moisture', 'soil', 'Soil Moisture', '%'),
+        ]
+        node_map = {node.id: node for node in nodes}
+        for node_id, device_id in devices:
+            samples = list(readings.filter(node_id=node_id, device_id=device_id).order_by('-reading_ts', '-id')[:2])
+            latest = samples[0]
+            previous = samples[1] if len(samples) > 1 else None
+            for metric, prefix, name, unit in metrics:
+                value = getattr(latest, metric)
+                before = getattr(previous, metric) if previous else None
+                trend = None
+                if value is not None and before is not None:
+                    trend = 'up' if value > before else 'down' if value < before else 'stable'
                 tiles.append({
-                    "sensor_id": f"temp-{latest.device_id}",
-                    "sensor_name": "Ambient Temperature",
-                    "sensor_kind": "temperature",
-                    "value": round(float(latest.temperature), 1),
-                    "unit": "°C",
-                    "status": "online",
-                    "trend": "stable",
-                    "updated_at": ts_iso
-                })
-            if latest.humidity is not None:
-                tiles.append({
-                    "sensor_id": f"hum-{latest.device_id}",
-                    "sensor_name": "Relative Humidity",
-                    "sensor_kind": "humidity",
-                    "value": round(float(latest.humidity), 1),
-                    "unit": "%",
-                    "status": "online",
-                    "trend": "stable",
-                    "updated_at": ts_iso
-                })
-            if latest.soil_moisture is not None:
-                tiles.append({
-                    "sensor_id": f"soil-{latest.device_id}",
-                    "sensor_name": "Soil Moisture",
-                    "sensor_kind": "soil_moisture",
-                    "value": round(float(latest.soil_moisture), 1),
-                    "unit": "%",
-                    "status": "online",
-                    "trend": "stable",
-                    "updated_at": ts_iso
+                    'sensor_id': f'{prefix}-{node_id}-{device_id}',
+                    'node_id': node_id, 'device_id': device_id,
+                    'sensor_name': f'{name} · {device_id}',
+                    'sensor_kind': metric,
+                    'value': round(float(value), 1) if value is not None else None,
+                    'unit': unit,
+                    'status': 'online' if node_map[node_id].is_online else 'offline',
+                    'trend': trend,
+                    'updated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(latest.reading_ts)),
                 })
 
         # 2. Fetch actuators
@@ -171,12 +171,15 @@ class DashboardSummaryView(APIView):
             if kind not in ['pump', 'fan', 'vent', 'light', 'heater']:
                 kind = 'pump'
             actuators.append({
+                "id": a.id,
+                "node": a.node_id,
+                "confirmed_at": a.confirmed_at,
                 "actuator_id": a.actuator_id,
                 "name": f"{a.actuator_type.title()} ({a.actuator_id})",
                 "actuator_kind": kind,
                 "is_active": bool(a.is_active),
                 "auto_mode": True,
-                "status": "online" if getattr(a.node, 'is_claimed', False) else "offline",
+                "status": "online" if a.node.is_online else "offline",
             })
 
         # 3. Overall status & active alerts
@@ -185,7 +188,7 @@ class DashboardSummaryView(APIView):
             status_msg = f"System Warning: {active_alerts} active alert(s) detected."
             overall_status = "warning"
         else:
-            status_msg = "System Healthy. All conditions within optimal range."
+            status_msg = "No unresolved alerts. Review readings against your crop's configured thresholds."
             overall_status = "healthy"
 
         return Response({

@@ -1,7 +1,7 @@
 // ============================================================
 // CropFit — Central Fetch Wrapper
 // Attaches JWT token to every request.
-// Falls back to mock data when the backend is unreachable.
+// API failures are surfaced to callers for explicit error states.
 // ============================================================
 
 import type { AuthTokens, ApiError } from '@/types';
@@ -39,8 +39,14 @@ export function getTokens(): AuthTokens | null {
   if (typeof window !== 'undefined') {
     const raw = localStorage.getItem('cropfit_tokens');
     if (raw) {
-      tokens = JSON.parse(raw) as AuthTokens;
-      return tokens;
+      try {
+        const parsed = JSON.parse(raw) as AuthTokens;
+        if (typeof parsed.access !== 'string' || typeof parsed.refresh !== 'string') throw new Error('Invalid tokens');
+        tokens = parsed;
+        return tokens;
+      } catch {
+        clearTokens();
+      }
     }
   }
   return null;
@@ -158,7 +164,11 @@ export async function api<T>(endpoint: string, options: FetchOptions = {}): Prom
     } catch {
       // If token refresh fails, redirect to login
       if (typeof window !== 'undefined') {
-        window.location.href = '/login';
+        if (!window.location.pathname.endsWith('/login')) {
+          const destination = window.location.pathname + window.location.search;
+          sessionStorage.setItem('cropfit_redirect', destination);
+          window.location.href = `/login?redirect=${encodeURIComponent(destination)}`;
+        }
       }
       throw new Error('Authentication required');
     }

@@ -10,5 +10,6 @@ topic read greennode/+/status
 
 user greennode-dispatch
 topic write greennode/+/cmd
+topic read greennode/+/ack
 
 # --- GENERATED DEVICE ENTRIES BELOW THIS LINE ---

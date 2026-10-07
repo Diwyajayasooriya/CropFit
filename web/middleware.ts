@@ -1,11 +1,8 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
-// Routes that require authentication
-const PROTECTED_ROUTES = ['/admin'];
-
 // Routes that are public (no auth needed)
-const PUBLIC_ROUTES = ['/login', '/claim'];
+const PUBLIC_ROUTES = ['/login'];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -28,7 +25,7 @@ export function middleware(request: NextRequest) {
     // Block unauthenticated users from /admin/*
     if (!isLoggedIn) {
       const loginUrl = new URL('/admin/login', request.url);
-      loginUrl.searchParams.set('redirect', pathname);
+      loginUrl.searchParams.set('redirect', pathname + request.nextUrl.search);
       return NextResponse.redirect(loginUrl);
     }
 
@@ -42,9 +39,9 @@ export function middleware(request: NextRequest) {
   }
 
   // --- Regular protected routes ---
-  if (!PUBLIC_ROUTES.some((r) => pathname.startsWith(r)) && !isLoggedIn) {
+  if (!PUBLIC_ROUTES.includes(pathname) && !isLoggedIn) {
     const loginUrl = new URL('/login', request.url);
-    loginUrl.searchParams.set('redirect', pathname);
+    loginUrl.searchParams.set('redirect', pathname + request.nextUrl.search);
     return NextResponse.redirect(loginUrl);
   }
 

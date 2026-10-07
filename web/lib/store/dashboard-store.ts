@@ -7,13 +7,10 @@
 import { create } from 'zustand';
 import type {
   DashboardSummary,
-  DashboardTile,
-  ActuatorState,
   SensorReading,
 } from '@/types';
 import { CropFitWebSocket, createWebSocket } from '@/lib/websocket';
 import { apiFetch } from '@/lib/api';
-import { mockDashboard } from '@/lib/mock-data';
 import { toast } from '@/lib/store/toast-store';
 
 interface DashboardState {
@@ -23,9 +20,9 @@ interface DashboardState {
   wsConnected: boolean;
 
   // Actions
-  fetchDashboard: () => Promise<void>;
+  fetchDashboard: (greenhouseId?: number) => Promise<void>;
   updateTile: (sensorId: string, value: number, timestamp: string) => void;
-  updateActuator: (actuatorId: string, isActive: boolean) => void;
+  updateActuator: (actuatorId: string, isActive: boolean) => Promise<void>;
 
   // WebSocket
   ws: CropFitWebSocket | null;
@@ -40,16 +37,14 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   wsConnected: false,
   ws: null,
 
-  fetchDashboard: async () => {
+  fetchDashboard: async (greenhouseId) => {
     set({ isLoading: true, error: null });
 
     try {
-      const data = await apiFetch.get<DashboardSummary>('/reports/dashboard/');
+      const data = await apiFetch.get<DashboardSummary>(`/reports/dashboard/${greenhouseId ? `?greenhouse=${greenhouseId}` : ''}`);
       set({ summary: data, isLoading: false });
-    } catch {
-      // Fall back to mock data in dev
-      console.warn('[Dashboard] Backend unreachable, using mock data');
-      set({ summary: mockDashboard, isLoading: false });
+    } catch (error) {
+      set({ summary: null, isLoading: false, error: error instanceof Error ? error.message : 'Could not load dashboard.' });
     }
   },
 
@@ -75,17 +70,12 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     try {
       // Real API call to edge gateway (assuming it's routed through the same API_BASE or configured differently)
       // For now, following the pattern of wiring to real APIs:
-      await apiFetch.post(`/actuators/${actuatorId}/command/`, {
+      await apiFetch.post(`/nodes/actuators/${actuatorId}/command/`, {
         action: isActive ? 'ON' : 'OFF',
       });
 
-      const updatedActuators = current.actuators.map((act) =>
-        act.actuator_id === actuatorId ? { ...act, is_active: isActive } : act
-      );
-
-      set({
-        summary: { ...current, actuators: updatedActuators },
-      });
+        // Queue acceptance is not a physical state change. Confirmed state is
+        // refreshed separately by the dashboard/command status endpoint.
     } catch (err) {
       console.error('Failed to update actuator:', err);
       toast.error('Could not send command to edge device.', 'Actuator Error');
@@ -113,7 +103,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     });
 
     ws.on<{ actuator_id: string; is_active: boolean }>('actuator_update', (data) => {
-      get().updateActuator(data.actuator_id, data.is_active);
+      const current = get().summary;
+      if (current) set({ summary: { ...current, actuators: current.actuators.map(a => a.actuator_id === data.actuator_id ? { ...a, is_active: data.is_active } : a) } });
     });
 
     ws.on<{ message: string; overall_status: 'healthy' | 'warning' | 'critical' }>(

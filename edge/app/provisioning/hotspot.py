@@ -26,10 +26,16 @@ def start_setup_hotspot(ssid: str, ip_address: str = "192.168.4.1/24") -> bool:
         "ipv4.addresses", ip_address,
     ]
     try:
-        subprocess.run(cmd, capture_output=True, text=True, check=True)
-        subprocess.run(["nmcli", "connection", "up", HOTSPOT_CON_NAME], check=True)
+        subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=15)
+        subprocess.run(
+            ["nmcli", "connection", "up", HOTSPOT_CON_NAME],
+            capture_output=True, text=True, check=True, timeout=45,
+        )
         log.info("Captive Access Point active: %s @ %s", ssid, ip_address)
         return True
+    except subprocess.CalledProcessError as e:
+        log.warning("Could not start hotspot via NetworkManager: %s", (e.stderr or str(e)).strip())
+        return False
     except Exception as e:
         log.warning("Could not start hotspot via NetworkManager: %s", e)
         return False

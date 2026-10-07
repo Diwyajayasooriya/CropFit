@@ -7,7 +7,6 @@
 'use client';
 
 import React, { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/lib/store/auth-store';
 import { toast } from '@/lib/store/toast-store';
 import {
@@ -18,13 +17,11 @@ import {
 } from '@/components/icons';
 
 export default function LoginPage() {
-  const router = useRouter();
   const { login, isLoading, error, clearError } = useAuthStore();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [rememberMe, setRememberMe] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string }>({});
 
@@ -68,18 +65,7 @@ export default function LoginPage() {
       await login({ email: email.trim(), password });
       toast.success('Successfully authenticated with Greenhouse Hub', 'Welcome');
 
-      const savedDestination = sessionStorage.getItem('cropfit_redirect');
-      if (savedDestination) {
-        sessionStorage.removeItem('cropfit_redirect');
-        router.push(savedDestination);
-      } else {
-        const currentUser = useAuthStore.getState().user;
-        if (currentUser && !currentUser.onboarding_completed) {
-          router.push('/onboarding');
-        } else {
-          router.push('/');
-        }
-      }
+      // AuthGuard owns post-login navigation, including pending claim links.
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Invalid credentials. Please verify your credentials.';
       toast.error(msg, 'Authentication Failed');
@@ -104,7 +90,7 @@ export default function LoginPage() {
             CropFit Greenhouse
           </h1>
           <p className="text-xs text-slate-500">
-            Sign in to access your local Edge Gateway & Greenhouse Dashboard
+            Sign in to monitor your greenhouses and GreenNode hubs
           </p>
         </div>
 
@@ -124,7 +110,7 @@ export default function LoginPage() {
                 htmlFor="email"
                 className="block text-xs font-semibold text-slate-700"
               >
-                Farmer Email or Username
+                Farmer email or username
               </label>
               <input
                 id="email"
@@ -137,7 +123,7 @@ export default function LoginPage() {
                     setFieldErrors((prev) => ({ ...prev, email: undefined }));
                   }
                 }}
-                placeholder="farmer@cropfit.local or username"
+                placeholder="Your farmer email or username"
                 className={`w-full px-3.5 py-2.5 rounded-xl bg-slate-50/80 border text-sm text-slate-900 placeholder-slate-400 focus:outline-none transition-all ${
                   fieldErrors.email
                     ? 'border-rose-400 focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 bg-rose-50/30'
@@ -196,21 +182,6 @@ export default function LoginPage() {
               )}
             </div>
 
-            {/* Remember Me Option */}
-            <div className="flex items-center justify-between text-xs pt-1">
-              <label className="flex items-center gap-2 cursor-pointer text-slate-600">
-                <input
-                  type="checkbox"
-                  checked={rememberMe}
-                  onChange={(e) => setRememberMe(e.target.checked)}
-                  className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 accent-emerald-600"
-                />
-                <span>Keep session active</span>
-              </label>
-              <span className="text-slate-400 text-[11px]">
-                Secured by Edge JWT
-              </span>
-            </div>
 
             {/* Submit Button */}
             <button
@@ -226,7 +197,7 @@ export default function LoginPage() {
         {/* Footer info: Clean, farmer-focused (no admin portal leakage) */}
         <div className="text-center space-y-1">
           <p className="text-[11px] text-slate-400">
-            CropFit Smart Greenhouse System • Offline-Resilient Local Auth
+            CropFit Smart Greenhouse System
           </p>
           <p className="text-[10px] text-slate-400">
             Need device pairing assistance? Visit <a href="/claim" className="text-emerald-600 hover:underline font-medium">Claim Device</a>.

@@ -6,7 +6,7 @@
 'use client';
 
 import { useEffect, useRef, useCallback } from 'react';
-import { CropFitWebSocket, createWebSocket, type WSOptions } from '@/lib/websocket';
+import { CropFitWebSocket, createWebSocket } from '@/lib/websocket';
 import type { WSMessage, WSMessageType } from '@/types';
 
 interface UseWebSocketOptions {
@@ -55,5 +55,6 @@ export function useWebSocket(options: UseWebSocketOptions) {
     return wsRef.current?.on(type, cb);
   }, []);
 
-  return { send, on, ws: wsRef.current };
+  const getSocket = useCallback(() => wsRef.current, []);
+  return { send, on, getSocket };
 }
