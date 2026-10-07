@@ -11,6 +11,7 @@ export type UserRole = 'farmer' | 'admin' | 'technician';
 export interface User {
   id: number;
   email: string;
+  username?: string;
   first_name: string;
   last_name: string;
   role: UserRole;
@@ -28,6 +29,31 @@ export interface AuthTokens {
 export interface LoginCredentials {
   email: string;
   password: string;
+}
+
+// ---- Greenhouse ----
+
+export interface Greenhouse {
+  id: number;
+  user: number;
+  name: string;
+  location: string;
+  crop: string;
+  plantation_date?: string;
+  created_at: string;
+  node_count: number;
+}
+
+// ---- Recommendation ----
+
+export interface Recommendation {
+  id: string;
+  title: string;
+  message: string;
+  metrics?: Record<string, string>;
+  action_label?: string;
+  action_url?: string;
+  created_at: string;
 }
 
 // ---- Devices ----
@@ -94,17 +120,22 @@ export interface TelemetryTimeSeries {
 // ---- Dashboard ----
 
 export interface DashboardTile {
+  node_id?: number;
+  device_id?: string;
   sensor_id: string;
   sensor_name: string;
   sensor_kind: SensorKind;
-  value: number;
+  value: number | null;
   unit: string;
   status: DeviceStatus;
-  trend: 'up' | 'down' | 'stable';
+  trend: 'up' | 'down' | 'stable' | null;
   updated_at: string;
 }
 
 export interface ActuatorState {
+  id?: number;
+  node?: number;
+  confirmed_at?: string | null;
   actuator_id: string;
   name: string;
   actuator_kind: ActuatorKind;
@@ -173,7 +204,7 @@ export interface Alert {
   title: string;
   message: string;
   severity: AlertSeverity;
-  is_read: boolean;
+  is_resolved: boolean;
   device_id?: string;
   rule_id?: string;
   created_at: string;
@@ -190,5 +221,8 @@ export interface PaginatedResponse<T> {
 
 export interface ApiError {
   detail: string;
+  message?: string;
+  error?: string;
   code?: string;
+  retry_after_seconds?: number;
 }

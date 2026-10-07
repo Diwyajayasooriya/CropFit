@@ -47,13 +47,20 @@ def is_cloud_reachable(cloud_url: str, timeout: float = 3.0) -> bool:
 
 
 def is_wifi_connected() -> bool:
-    """Checks whether wlan0 has an active IP and connected state."""
-    cmd = ["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "device"]
+    """Check for an active client Wi-Fi profile, excluding our setup AP."""
+    cmd = ["nmcli", "-t", "-f", "UUID,TYPE", "connection", "show", "--active"]
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        res = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=5)
         for line in res.stdout.strip().split("\n"):
-            parts = line.split(":")
-            if len(parts) >= 3 and parts[1] == "wifi" and parts[2] == "connected":
+            uuid, separator, connection_type = line.partition(":")
+            if not separator or connection_type not in ("wifi", "802-11-wireless"):
+                continue
+            mode = subprocess.run(
+                ["nmcli", "-g", "802-11-wireless.mode", "connection", "show", "uuid", uuid],
+                capture_output=True, text=True, check=True, timeout=5,
+            ).stdout.strip()
+            # An unspecified mode defaults to infrastructure (client) mode.
+            if mode in ("", "infrastructure"):
                 return True
     except Exception as e:
         log.debug("Could not query nmcli device state: %s", e)
@@ -101,4 +108,3 @@ def connect_to_wifi(ssid: str, password: str = "") -> bool:
     except Exception as e:
         log.error("Exception during Wi-Fi connect: %s", e)
         return False
-

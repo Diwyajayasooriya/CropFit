@@ -1,6 +1,7 @@
 from rest_framework import viewsets, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework.exceptions import ValidationError, PermissionDenied
 from apps.conditions.models.models import Condition, ConditionReading
 from apps.conditions.serializers import (
     ConditionSerializer,
@@ -19,6 +20,27 @@ class ConditionViewSet(viewsets.ModelViewSet):
     serializer_class = ConditionSerializer
     permission_classes = [IsFarmer]
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        if not (user.is_superuser or getattr(user, 'role', '') == 'admin'):
+            qs = qs.filter(greenhouse__user=user, node__greenHouse__user=user)
+        greenhouse = self.request.query_params.get('greenhouse')
+        return qs.filter(greenhouse_id=greenhouse) if greenhouse else qs
+
+    def save_condition(self, serializer):
+        greenhouse = serializer.validated_data.get('greenhouse', getattr(serializer.instance, 'greenhouse', None))
+        node = serializer.validated_data.get('node', getattr(serializer.instance, 'node', None))
+        if not node or not greenhouse or node.greenHouse_id != greenhouse.id:
+            raise ValidationError('The node must belong to the selected greenhouse.')
+        user = self.request.user
+        if not (user.is_superuser or getattr(user, 'role', '') == 'admin') and greenhouse.user_id != user.id:
+            raise PermissionDenied('Choose one of your own greenhouses.')
+        serializer.save()
+
+    perform_create = save_condition
+    perform_update = save_condition
+
 
 class ConditionReadingViewSet(viewsets.ReadOnlyModelViewSet):
     """Read-only viewset for telemetry history."""
@@ -28,6 +50,15 @@ class ConditionReadingViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
+        user = self.request.user
+        if not (user.is_superuser or getattr(user, 'role', '') == 'admin'):
+            qs = qs.filter(node__greenHouse__user=user)
+        greenhouse = self.request.query_params.get('greenhouse')
+        node = self.request.query_params.get('node')
+        if greenhouse:
+            qs = qs.filter(node__greenHouse_id=greenhouse)
+        if node:
+            qs = qs.filter(node_id=node)
         device_id = self.request.query_params.get('device_id')
         hours = self.request.query_params.get('hours')
         if device_id:
@@ -35,11 +66,14 @@ class ConditionReadingViewSet(viewsets.ReadOnlyModelViewSet):
         if hours:
             try:
                 import time
-                cutoff = int(time.time()) - (int(hours) * 3600)
+                hours_int = int(hours)
+                if not 1 <= hours_int <= 168:
+                    raise ValueError
+                cutoff = int(time.time()) - (hours_int * 3600)
                 qs = qs.filter(reading_ts__gte=cutoff)
             except ValueError:
-                pass
-        return qs[:500]
+                raise ValidationError({'hours': 'Choose a range between 1 and 168 hours.'})
+        return qs[:500] if self.action == 'list' else qs
 
 
 class BulkSyncView(APIView):
@@ -49,6 +83,7 @@ class BulkSyncView(APIView):
     Uses bulk_create for optimal SQL insertion performance.
     """
     permission_classes = [HasEdgeSyncToken]
+    authentication_classes = []
 
     def post(self, request):
         serializer = BulkSyncRequestSerializer(data=request.data)
@@ -60,13 +95,18 @@ class BulkSyncView(APIView):
 
         # Look up node
         node_obj = Node.objects.filter(node_id=node_id_str).first()
+        authenticated_node = getattr(request, 'node', None)
+        if authenticated_node and (not node_obj or node_obj.id != authenticated_node.id):
+            raise PermissionDenied('A hub may only sync its own readings.')
+        if not node_obj:
+            raise ValidationError({'node_id': 'Unknown node.'})
 
         readings_to_create = []
         for item in readings_data:
             payload = item.get('payload', {})
-            temp = payload.get('temperature') or payload.get('temp')
-            hum = payload.get('humidity') or payload.get('hum')
-            soil = payload.get('soil_moisture') or payload.get('soil')
+            temp = payload.get('temperature', payload.get('temp'))
+            hum = payload.get('humidity', payload.get('hum'))
+            soil = payload.get('soil_moisture', payload.get('soil'))
 
             readings_to_create.append(
                 ConditionReading(

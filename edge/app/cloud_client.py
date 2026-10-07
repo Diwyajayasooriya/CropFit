@@ -102,7 +102,7 @@ class CloudClient:
         if not self.hub_token:
             return None
 
-        url = f"{self.base_url}/api/v1/nodes/config/?node_id={self.device_id}"
+        url = f"{self.base_url}/api/v1/nodes/nodes/config/?node_id={self.device_id}"
         try:
             with httpx.Client(timeout=self.timeout) as client:
                 res = client.get(url, headers=self._headers())
@@ -111,3 +111,22 @@ class CloudClient:
         except Exception as e:
             log.warning("Config fetch error: %s", e)
         return None
+
+    def poll_commands(self):
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                response = client.get(f'{self.base_url}/api/v1/nodes/commands/poll/', headers=self._headers())
+                if response.status_code == 200:
+                    return response.json().get('commands', [])
+        except Exception as error:
+            log.debug('Command polling failed: %s', error)
+        return []
+
+    def ack_command(self, result):
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                response = client.post(f'{self.base_url}/api/v1/nodes/commands/ack/', json=result, headers=self._headers())
+                return response.status_code == 200
+        except Exception as error:
+            log.debug('Command acknowledgement failed: %s', error)
+            return False

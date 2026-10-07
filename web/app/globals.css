@@ -42,3 +42,35 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
 }
+
+/* Safe area for mobile bottom nav (notched phones) */
+.safe-area-inset-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Page transition animation */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-page-in {
+  animation: fadeIn 0.25s ease-out;
+}
+
+:where(button, a, input, select, summary):focus-visible {
+  outline: 2px solid #059669;
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+
+@layer components {
+ .page-content { @apply px-4 sm:px-6 lg:px-8 py-6 space-y-6; }
+ .panel { @apply p-5 rounded-2xl bg-white border border-slate-200; }
+ .field { @apply w-full mt-1 px-3 py-2 rounded-lg border border-slate-300 bg-white; }
+ .primary-button { @apply px-4 py-2 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50; }
+}

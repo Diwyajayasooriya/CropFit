@@ -158,7 +158,10 @@ class EdgeStateMachine:
         dev_suffix = self.config["device_id"].split("-")[-1]
         ssid = f"CropFit-Hub-{dev_suffix}"
 
-        start_setup_hotspot(ssid)
+        if not start_setup_hotspot(ssid):
+            log.warning("Setup hotspot failed to start; retrying in 5 seconds.")
+            time.sleep(5.0)
+            return
         self.start_portal_server()
 
         log.info("Captive SoftAP active [%s]. Waiting for farmer Wi-Fi setup via http://192.168.4.1...", ssid)
@@ -260,6 +263,15 @@ class EdgeStateMachine:
         ok = client.send_heartbeat(uptime_seconds=uptime, ip_address=ip_addr)
         if ok:
             self.consecutive_cloud_errors = 0
+            try:
+                from app.command_worker import CommandWorker
+                journal = os.environ.get('CROPFIT_COMMAND_JOURNAL') or (
+                    self.config_mgr.config_file.parent / 'command-results.sqlite3'
+                    if os.name == 'nt' else '/var/lib/cropfit/command-results.sqlite3'
+                )
+                CommandWorker(client, journal).tick()
+            except Exception:
+                log.exception('Command delivery failed; heartbeat service will continue')
             log.info("✓ Heartbeat ACK (uptime=%ds, ip=%s)", uptime, ip_addr)
             time.sleep(30.0)
         else:
@@ -288,4 +300,3 @@ class EdgeStateMachine:
         else:
             log.warning("Wi-Fi is active but cloud is still unreachable. Backing off 15s...")
             time.sleep(15.0)
-

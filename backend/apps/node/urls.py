@@ -1,5 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
+from apps.node.commands import CommandPollView, CommandAckView
 
 from apps.node.views import (
     NodeViewSet,
@@ -19,6 +20,8 @@ router.register(r'sensors', SensorViewSet, basename='sensor')
 router.register(r'actuators', ActuatorViewSet, basename='actuator')
 
 urlpatterns = [
+    path('commands/poll/', CommandPollView.as_view(), name='command-poll'),
+    path('commands/ack/', CommandAckView.as_view(), name='command-ack'),
     path('bootstrap/', NodeBootstrapView.as_view(), name='node-bootstrap'),
     path('claim/', NodeClaimView.as_view(), name='hub-claim'),
     path('poll-claim/', NodePollClaimView.as_view(), name='hub-poll-claim'),
