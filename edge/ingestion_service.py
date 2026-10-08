@@ -58,7 +58,7 @@ def is_device_allowed(session, device_id: str) -> bool:
     device = session.execute(
         select(ConnectedDevice).where(
             ConnectedDevice.device_id == device_id,
-            ConnectedDevice.revoked == False,  # noqa: E712
+            ConnectedDevice.revoked == False, 
         )
     ).scalar_one_or_none()
     return device is not None
