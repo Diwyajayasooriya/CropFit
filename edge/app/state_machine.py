@@ -167,7 +167,7 @@ class EdgeStateMachine:
         log.info("Captive SoftAP active [%s]. Waiting for farmer Wi-Fi setup via http://192.168.4.1...", ssid)
 
         # Wait until farmer submits credentials and network connects
-        while not (is_wifi_connected() or has_active_internet()):
+        while not has_active_internet():
             time.sleep(2.0)
 
         log.info("Wi-Fi connected successfully via portal!")
