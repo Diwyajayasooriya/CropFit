@@ -5,7 +5,7 @@ import Link from 'next/link';
 import type { Alert } from '@/types';
 import type { GreenNode } from '@/lib/api-functions';
 import { Card, CardHeader, CardTitle, CardContent, Button } from '@/components/ui';
-import { SparklesIcon, ChevronRightIcon, ArrowRightIcon } from '@/components/icons';
+import { SparklesIcon, ChevronRightIcon } from '@/components/icons';
 
 interface RecommendationCardProps {
   alerts?: Alert[];

@@ -78,6 +78,7 @@ class OnboardingStatusView(APIView):
             "greenhouse": {
                 "id": greenhouse.id,
                 "name": greenhouse.name,
+                "location": greenhouse.location,
                 "crop": greenhouse.crop,
             } if greenhouse else None,
             "hub": {
@@ -132,5 +133,4 @@ class LoginView(APIView):
                     "message":"Login failed"
                 }, status=status.HTTP_401_UNAUTHORIZED
             )
-
 
