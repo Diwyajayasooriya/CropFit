@@ -3,6 +3,7 @@ CropFit Edge — Main Daemon Entry Point
 Thin bootstrap script initializing configuration, identity, and the edge state machine.
 """
 import logging
+import argparse
 import sys
 from pathlib import Path
 
@@ -23,6 +24,9 @@ def setup_logging():
 
 
 def main():
+    parser = argparse.ArgumentParser(description="CropFit edge hub daemon")
+    parser.add_argument("--setup-wifi", action="store_true", help="Open Wi-Fi setup without resetting hub ownership or credentials")
+    args = parser.parse_args()
     setup_logging()
     log = logging.getLogger("cropfit.main")
     log.info("=" * 55)
@@ -30,7 +34,7 @@ def main():
     log.info("=" * 55)
 
     config_mgr = ConfigManager()
-    state_machine = EdgeStateMachine(config_mgr=config_mgr)
+    state_machine = EdgeStateMachine(config_mgr=config_mgr, setup_wifi=args.setup_wifi)
     state_machine.run()
 
 

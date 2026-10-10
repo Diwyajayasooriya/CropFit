@@ -67,6 +67,46 @@ def is_wifi_connected() -> bool:
     return False
 
 
+def saved_wifi_profiles() -> Optional[List[str]]:
+    """Return saved client profile UUIDs; None means NetworkManager is unavailable.
+
+    Do not read secrets or mistake a saved setup AP for farm Wi-Fi.
+    """
+    try:
+        result = subprocess.run(
+            ["nmcli", "-t", "-f", "UUID,TYPE", "connection", "show"],
+            capture_output=True, text=True, check=True, timeout=5,
+        )
+        profiles = []
+        for line in result.stdout.splitlines():
+            uuid, separator, connection_type = line.partition(":")
+            if not separator or connection_type not in ("wifi", "802-11-wireless"):
+                continue
+            mode = subprocess.run(
+                ["nmcli", "-g", "802-11-wireless.mode", "connection", "show", "uuid", uuid],
+                capture_output=True, text=True, check=True, timeout=5,
+            ).stdout.strip()
+            if mode in ("", "infrastructure"):
+                profiles.append(uuid)
+        return profiles
+    except (subprocess.SubprocessError, OSError):
+        log.warning("Cannot query saved Wi-Fi profiles; retaining network recovery mode.")
+        return None
+
+
+def reconnect_saved_wifi(profile_uuid: str) -> bool:
+    """Activate an existing profile using NetworkManager's stored credentials."""
+    try:
+        result = subprocess.run(
+            ["nmcli", "--wait", "15", "connection", "up", "uuid", profile_uuid],
+            capture_output=True, text=True, timeout=20,
+        )
+        return result.returncode == 0
+    except (subprocess.SubprocessError, OSError):
+        log.warning("Saved Wi-Fi activation did not complete; will retry.")
+        return False
+
+
 def scan_wifi_networks() -> List[Dict[str, str]]:
     """Scans and lists visible SSIDs without shell interpolation."""
     cmd = ["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "device", "wifi", "list", "--rescan", "yes"]

@@ -8,10 +8,8 @@ import { usePollingResource } from '@/hooks/use-polling-resource';
 import { Topbar } from '@/components/layout/Topbar';
 import { ResourceState } from '@/components/resource-state';
 import { HubStatus } from '@/components/hub-status';
-import { StatusBadge } from '@/components/status-badge';
-import { ActuatorControl } from '@/components/actuator-control';
+import { ActuatorDeviceCard, DeviceCategoryCards, HubDeviceCard, SensorDeviceCard } from '@/components/devices/DeviceCards';
 import { toast } from '@/lib/store/toast-store';
-import { timeAgo } from '@/lib/utils';
 import type { DashboardSummary } from '@/types';
 
 function RegisterDevice({ nodes, onSaved }: { nodes: GreenNode[]; onSaved: () => void }) {
@@ -54,23 +52,40 @@ function DeviceScope({ greenhouseId }: { greenhouseId: number }) {
     const [nodes, summary] = await Promise.all([getNodes(greenhouseId), apiFetch.get<DashboardSummary>(`/reports/dashboard/?greenhouse=${greenhouseId}`)]);
     return { nodes, summary };
   }, [greenhouseId]);
-  const resource = usePollingResource(load);
+  const resource = usePollingResource(load, 15000);
   const nodes = resource.data?.nodes ?? [];
   const visible = nodes.filter(n => !selectedNode || String(n.id) === selectedNode);
   const sensors = visible.flatMap(n => n.sensors.map(s => ({ ...s, hub: n })));
-  const actuators = visible.flatMap(n => n.actuators);
+  const actuators = visible.flatMap(n => n.actuators.map(a => ({ ...a, hub: n })));
   return <div className="space-y-5">
     <div className="flex flex-wrap items-center justify-between gap-3"><label className="text-sm">Hub<select className="field" value={selectedNode} onChange={e => setSelectedNode(e.target.value)}><option value="">All hubs</option>{nodes.map(n => <option key={n.id} value={n.id}>{n.node_name || n.node_id}</option>)}</select></label><HubStatus nodes={visible} loading={resource.loading} error={resource.error} /><button className="text-emerald-700 underline text-sm" onClick={resource.reload}>Refresh devices</button></div>
     <ResourceState {...resource} retry={resource.reload} />
     {resource.error && resource.data && <p className="text-amber-700 text-sm">Device data is stale.</p>}
     {!resource.loading && !resource.error && !nodes.length && <section className="panel"><p className="mb-3">Link a GreenNode before registering devices.</p><Link className="primary-button inline-block" href={`/claim?greenhouse=${greenhouseId}`}>Add hub</Link></section>}
-    <div className="flex flex-wrap gap-2" aria-label="Device category">{['all','hub','sensor','actuator'].map(f => <button key={f} aria-pressed={filter === f} onClick={() => setFilter(f)} className={`rounded-xl px-4 py-2 text-sm capitalize ${filter === f ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200'}`}>{f === 'all' ? 'All devices' : `${f}s`}</button>)}</div>
-    {(filter === 'all' || filter === 'hub') && <section className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">{visible.map(n => <article className="panel space-y-3" key={n.id}><h3 className="font-semibold">{n.node_name || n.node_id}</h3><p className="text-sm text-slate-500">{n.node_id}</p><StatusBadge tone={resource.error ? 'pending' : n.is_online ? 'success' : 'neutral'}>{n.is_online ? 'Online' : 'Offline'}{resource.error ? ' (last known)' : ''}</StatusBadge><p className="text-xs text-slate-500">Heartbeat: {timeAgo(n.last_seen)} · v{n.software_version}</p></article>)}</section>}
-    {(filter === 'all' || filter === 'sensor') && <section><h3 className="font-semibold mb-3">Sensors ({sensors.length})</h3><div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">{sensors.map(s => {
-      const readings = resource.data?.summary.tiles.filter(t => t.node_id === s.node && t.device_id === s.sensor_id) ?? [];
-      return <article key={s.id} className="panel space-y-3"><div className="flex justify-between gap-2"><h4 className="font-medium">{s.sensor_type}</h4><StatusBadge tone={s.is_active ? 'success' : 'neutral'}>{s.is_active ? 'Enabled' : 'Disabled'}</StatusBadge></div><p className="text-xs text-slate-500">{s.sensor_id} · {s.hub.node_name || s.hub.node_id}</p>{readings.length ? readings.map(t => <div key={t.sensor_id}><p className="text-xl font-semibold">{t.value ?? 'No data'} {t.value !== null ? t.unit : ''}</p><p className="text-xs text-slate-500">{t.sensor_kind.replaceAll('_',' ')} · {timeAgo(t.updated_at)}</p></div>) : <p className="text-slate-500">No readings received</p>}</article>;
-    })}</div>{!sensors.length && <p className="text-sm text-slate-500">No sensors registered for this selection.</p>}</section>}
-    {(filter === 'all' || filter === 'actuator') && <section><h3 className="font-semibold mb-3">Actuators ({actuators.length})</h3><div className="grid sm:grid-cols-2 gap-4">{actuators.map(a => <article className="panel" key={a.id}><ActuatorControl id={a.id} name={`${a.actuator_type} (${a.actuator_id})`} /></article>)}</div>{!actuators.length && <p className="text-sm text-slate-500">No actuators registered for this selection.</p>}</section>}
+    <DeviceCategoryCards selected={filter} onSelect={setFilter} counts={{
+      all: resource.data ? visible.length + sensors.length + actuators.length : null,
+      hub: resource.data ? visible.length : null,
+      sensor: resource.data ? sensors.length : null,
+      actuator: resource.data ? actuators.length : null,
+    }} />
+    {(filter === 'all' || filter === 'hub') && <section aria-label="GreenNode hubs" className="space-y-3">
+      <h3 className="font-semibold text-slate-900">GreenNode hubs</h3>
+      <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-4">{visible.map(hub => <HubDeviceCard key={hub.id} hub={hub} stale={Boolean(resource.error)} />)}</div>
+      {resource.data && !visible.length && <p className="text-sm text-slate-500">No hubs for this selection.</p>}
+    </section>}
+    {(filter === 'all' || filter === 'sensor') && <section aria-label="Sensors" className="space-y-3">
+      <h3 className="font-semibold text-slate-900">Sensors</h3>
+      <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-4">{sensors.map(sensor => <SensorDeviceCard
+        key={sensor.id} sensor={sensor} hub={sensor.hub} stale={Boolean(resource.error)}
+        readings={resource.data?.summary.tiles.filter(t => t.node_id === sensor.node && t.device_id === sensor.sensor_id) ?? []}
+      />)}</div>
+      {resource.data && !sensors.length && <p className="text-sm text-slate-500">No sensors registered for this selection.</p>}
+    </section>}
+    {(filter === 'all' || filter === 'actuator') && <section aria-label="Actuators" className="space-y-3">
+      <h3 className="font-semibold text-slate-900">Actuators</h3>
+      <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-4">{actuators.map(actuator => <ActuatorDeviceCard key={actuator.id} actuator={actuator} hub={actuator.hub} stale={Boolean(resource.error)} />)}</div>
+      {resource.data && !actuators.length && <p className="text-sm text-slate-500">No actuators registered for this selection.</p>}
+    </section>}
     {!!nodes.length && <RegisterDevice nodes={visible} onSaved={resource.reload} />}
   </div>;
 }

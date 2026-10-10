@@ -23,6 +23,42 @@ function load(file, dependencies, globals = {}) {
   return exports;
 }
 
+test('greenhouse cards scope real hubs and distinguish offline, unavailable and unlinked states', () => {
+  const React = require('react');
+  const { renderToStaticMarkup } = require('react-dom/server');
+  const icon = () => null;
+  const { GreenhouseCard } = load('components/greenhouse/GreenhouseCard.tsx', {
+    react: React,
+    'react/jsx-runtime': require('react/jsx-runtime'),
+    'next/link': { default: ({ children, ...props }) => React.createElement('a', props, children) },
+    '@/lib/utils': { timeAgo: value => value || 'Never received' },
+    '@/components/ui': {
+      Card: ({ children }) => React.createElement('div', null, children),
+      StatusBadge: ({ children }) => React.createElement('span', null, children),
+    },
+    '@/components/icons': { WifiIcon: icon, WifiOffIcon: icon, ThermometerIcon: icon, DropletIcon: icon, ChevronRightIcon: icon },
+  });
+  const greenhouse = { id: 3, name: 'Farm A', crop: 'Tomato', node_count: 2 };
+  const nodes = [
+    { id: 1, greenHouse: 3, node_id: 'REAL-OFFLINE', node_name: 'North hub', is_online: false, last_seen: null },
+    { id: 2, greenHouse: 3, node_id: 'REAL-ONLINE', node_name: 'South hub', is_online: true, last_seen: 'recent' },
+    { id: 3, greenHouse: 4, node_id: 'OTHER-GREENHOUSE', is_online: true },
+  ];
+  const render = props => renderToStaticMarkup(React.createElement(GreenhouseCard, { greenhouse, nodes, ...props }));
+  const html = render({});
+  for (const value of ['REAL-OFFLINE', 'REAL-ONLINE', 'North hub', 'South hub', 'Offline', 'Online', 'Never received', '2 linked', 'Health: No data']) {
+    assert.ok(html.includes(value), value);
+  }
+  assert.doesNotMatch(html, /OTHER-GREENHOUSE|GN-HUB-C554|29\.4|46%|Health: Good/);
+  const stale = render({ nodesError: 'Network failed' });
+  assert.match(stale, /Status unknown/);
+  assert.doesNotMatch(stale, />Online|>Offline/);
+  const loading = render({ nodes: [], loading: true });
+  assert.match(loading, /Loading hubs/);
+  assert.doesNotMatch(loading, /No hub linked/);
+  assert.match(render({ nodes: [] }), /No hub linked/);
+});
+
 test('sidebar shows actual hubs and does not report stale or missing data as online', () => {
   const React = require('react');
   const { renderToStaticMarkup } = require('react-dom/server');
