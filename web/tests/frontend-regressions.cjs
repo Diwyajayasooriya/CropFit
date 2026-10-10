@@ -23,6 +23,35 @@ function load(file, dependencies, globals = {}) {
   return exports;
 }
 
+test('sidebar shows actual hubs and does not report stale or missing data as online', () => {
+  const React = require('react');
+  const { renderToStaticMarkup } = require('react-dom/server');
+  const { SidebarHubStatus } = load('components/layout/SidebarHubStatus.tsx', {
+    'react/jsx-runtime': require('react/jsx-runtime'),
+    'next/link': { default: ({ children, ...props }) => React.createElement('a', props, children) },
+    '@/lib/utils': { timeAgo: value => value || 'Never received' },
+  });
+  const render = props => renderToStaticMarkup(React.createElement(SidebarHubStatus, {
+    loading: false, error: null, onRetry() {}, ...props,
+  }));
+  const nodes = [
+    { id: 1, node_id: 'MY-HUB-1', node_name: 'North hub', greenHouse: 3, is_online: true, last_seen: 'recent' },
+    { id: 2, node_id: 'MY-HUB-2', node_name: 'South hub', greenHouse: 4, is_online: false, last_seen: null },
+  ];
+  const html = render({ nodes });
+  for (const expected of ['MY-HUB-1', 'MY-HUB-2', 'Online', 'Offline', 'href="/greenhouses/3"', 'href="/greenhouses/4"']) {
+    assert.ok(html.includes(expected), expected);
+  }
+  assert.doesNotMatch(html, /GN-HUB-C554/);
+  const stale = render({ nodes, error: 'Network unavailable' });
+  assert.match(stale, /Status unknown/);
+  assert.doesNotMatch(stale, />Online</);
+  assert.match(render({ nodes: [] }), /No hubs linked/);
+  const loading = render({ nodes: null, loading: true });
+  assert.match(loading, /Loading hubs/);
+  assert.doesNotMatch(loading, /Online|GN-HUB/);
+});
+
 test('list accepts arrays and follows pagination without forwarding tokens to a next-link host', async () => {
   const paths = [];
   const { list } = load('lib/api-functions.ts', { '@/lib/api': { apiFetch: {

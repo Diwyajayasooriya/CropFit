@@ -10,6 +10,9 @@ import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuthStore } from '@/lib/store/auth-store';
+import { getNodes } from '@/lib/api-functions';
+import { usePollingResource } from '@/hooks/use-polling-resource';
+import { SidebarHubStatus } from './SidebarHubStatus';
 import type { UserRole } from '@/types';
 import {
   SproutIcon,
@@ -19,8 +22,6 @@ import {
   LightningIcon,
   BellIcon,
   SettingsIcon,
-  WifiIcon,
-  WifiOffIcon,
   LogOutIcon,
 } from '@/components/icons';
 
@@ -45,20 +46,15 @@ const roleColors: Record<UserRole, { bg: string; text: string; border: string }>
   admin: { bg: 'bg-purple-50', text: 'text-purple-700', border: 'border-purple-200' },
 };
 
-interface SidebarProps {
-  hubOnline?: boolean;
-  hubId?: string;
-  hubName?: string;
-}
-
 function isActiveRoute(pathname: string, href: string): boolean {
   if (href === '/') return pathname === '/';
   return pathname === href || pathname.startsWith(href + '/');
 }
 
-export function Sidebar({ hubOnline = true, hubId = 'GN-HUB-C554', hubName = 'GreenNode' }: SidebarProps) {
+export function Sidebar() {
   const pathname = usePathname();
   const { user, logout } = useAuthStore();
+  const hubs = usePollingResource(getNodes, 15000);
 
   const currentRole = user?.role || 'farmer';
   const roleStyle = roleColors[currentRole] ?? roleColors.farmer;
@@ -115,34 +111,13 @@ export function Sidebar({ hubOnline = true, hubId = 'GN-HUB-C554', hubName = 'Gr
       {/* ── Bottom Section ── */}
       <div className="mt-auto border-t border-slate-100 p-4 space-y-3 bg-slate-50/50">
         {/* ── GreenNode Status Card ── */}
-        <div className="p-3 bg-white rounded-xl border border-slate-200/80 shadow-2xs">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  hubOnline ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'
-                }`}
-              />
-              <span className="text-xs font-semibold text-slate-800">
-                {hubName} {hubOnline ? 'Online' : 'Offline'}
-              </span>
-            </div>
-            {hubOnline ? (
-              <WifiIcon size={14} className="text-emerald-600" />
-            ) : (
-              <WifiOffIcon size={14} className="text-slate-400" />
-            )}
-          </div>
-          <p className="text-[11px] font-mono text-slate-400 mt-1 pl-4">
-            {hubId || 'GN-HUB-C554'}
-          </p>
-        </div>
+        <SidebarHubStatus nodes={hubs.data} loading={hubs.loading} error={hubs.error} onRetry={hubs.reload} />
 
         {/* ── User Info & Role ── */}
         <div className="p-2.5 flex items-center justify-between">
           <div className="min-w-0 pr-2">
             <p className="text-sm font-semibold text-slate-900 truncate">
-              {user?.first_name ? `${user.first_name} ${user.last_name || ''}`.trim() : 'Nimal'}
+              {user?.first_name ? `${user.first_name} ${user.last_name || ''}`.trim() : user?.username || 'Farmer'}
             </p>
             <span
               className={`inline-block mt-0.5 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider ${roleStyle.bg} ${roleStyle.text} border ${roleStyle.border}`}

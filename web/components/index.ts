@@ -15,3 +15,4 @@ export * from './layout/DashboardLayout';
 // UI & Dashboard design system components
 export * from './ui';
 export * from './dashboard';
+export * from './auth';

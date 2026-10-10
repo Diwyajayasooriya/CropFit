@@ -9,7 +9,7 @@
 
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/lib/store/auth-store';
 import { toast } from '@/lib/store/toast-store';
@@ -45,6 +45,9 @@ export default function OnboardingPage() {
 
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [submitting, setSubmitting] = useState(false);
+  const [restoring, setRestoring] = useState(true);
+  const [restoreError, setRestoreError] = useState(false);
+  const greenhouseSaveInFlight = useRef(false);
 
   // Step 1: Greenhouse fields
   const [ghName, setGhName] = useState('');
@@ -82,6 +85,8 @@ export default function OnboardingPage() {
     }
 
     async function restoreProgress() {
+      setRestoring(true);
+      setRestoreError(false);
       try {
         const res = await apiFetch.get<{
           onboarding_completed: boolean;
@@ -93,7 +98,12 @@ export default function OnboardingPage() {
         if (res.greenhouse) {
           setActiveGreenhouse(res.greenhouse);
           setGhName(res.greenhouse.name || '');
-          setGhLocation(res.greenhouse.location || '');
+          const location = res.greenhouse.location || '';
+          const area = location.match(/^(.*?)\s*\((\d+(?:\.\d+)?) (m²|sq ft|acres)\)$/)
+            || location.match(/^()(\d+(?:\.\d+)?) (m²|sq ft|acres)$/);
+          setGhLocation(area ? area[1] : location);
+          setGhArea(area ? area[2] : '');
+          if (area) setGhAreaUnit(area[3]);
           setGhCrop(res.greenhouse.crop || 'Tomato');
         }
 
@@ -117,7 +127,10 @@ export default function OnboardingPage() {
           setStep(1);
         }
       } catch (err) {
+        setRestoreError(true);
         console.warn('Could not restore onboarding step:', err);
+      } finally {
+        setRestoring(false);
       }
     }
 
@@ -126,33 +139,39 @@ export default function OnboardingPage() {
     }
   }, [isAuthenticated, isLoading, router]);
 
-  // STEP 1 SUBMIT: Create Greenhouse
+  // Returning to step 1 edits the selected greenhouse instead of creating another.
   const handleCreateGreenhouse = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (restoring || restoreError || greenhouseSaveInFlight.current) return;
     if (!ghName.trim()) {
       toast.error('Greenhouse name is required', 'Missing Input');
       return;
     }
 
+    greenhouseSaveInFlight.current = true;
     setSubmitting(true);
     try {
-      const fullLocation = ghLocation.trim()
-        ? `${ghLocation.trim()} (${ghArea} ${ghAreaUnit})`
-        : `${ghArea} ${ghAreaUnit}`;
+      const area = ghArea.trim() ? `${ghArea.trim()} ${ghAreaUnit}` : '';
+      const fullLocation = [ghLocation.trim(), area && (ghLocation.trim() ? `(${area})` : area)]
+        .filter(Boolean).join(' ');
 
-      const created = await apiFetch.post<GreenhouseData>('/greenhouses/', {
+      const body = {
         name: ghName.trim(),
         location: fullLocation,
         crop: ghCrop,
-      });
+      };
+      const created = activeGreenhouse
+        ? await apiFetch.patch<GreenhouseData>(`/greenhouses/${activeGreenhouse.id}/`, body)
+        : await apiFetch.post<GreenhouseData>('/greenhouses/', body);
 
       setActiveGreenhouse(created);
-      toast.success(`Greenhouse "${created.name}" created!`, 'Step 1 Complete');
+      toast.success(`Greenhouse "${created.name}" saved!`, 'Step 1 Complete');
       setStep(2);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to create greenhouse';
       toast.error(msg, 'Greenhouse Error');
     } finally {
+      greenhouseSaveInFlight.current = false;
       setSubmitting(false);
     }
   };
@@ -462,7 +481,7 @@ export default function OnboardingPage() {
                   <input
                     type="number"
                     min="1"
-                    value={ghArea || '500'}
+                    value={ghArea}
                     onChange={(e) => setGhArea(e.target.value)}
                     placeholder="500"
                     className="col-span-2 px-4 py-3 rounded-xl border border-slate-300 text-sm focus:outline-emerald-600 focus:border-emerald-600 transition-all bg-white"
@@ -483,11 +502,12 @@ export default function OnboardingPage() {
             <div className="pt-2">
               <button
                 type="submit"
-                disabled={submitting}
+                disabled={submitting || restoring || restoreError}
                 className="w-full py-3.5 px-6 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm transition-all shadow-md shadow-emerald-600/20 cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
               >
-                {submitting ? 'Creating...' : 'Create Greenhouse & Continue →'}
+                {restoring ? 'Loading saved progress...' : submitting ? 'Saving...' : activeGreenhouse ? 'Save Greenhouse & Continue →' : 'Create Greenhouse & Continue →'}
               </button>
+              {restoreError && <p role="alert" className="mt-3 text-sm text-red-600">Could not load your saved setup. Reload this page before continuing.</p>}
             </div>
           </form>
         )}
