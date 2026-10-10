@@ -1,48 +1,74 @@
 // ============================================================
-// CropFit — Standard Login (`/login`)
-// Clean, light-themed authentication page for greenhouse operators
+// CropFit — Greenhouse Farmer Login (`/login`)
+// Production-grade authentication page for farm operators
+// Features: Full field validation, show/hide password, zero admin leakage
 // ============================================================
 
 'use client';
 
 import React, { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import Link from 'next/link';
 import { useAuthStore } from '@/lib/store/auth-store';
 import { toast } from '@/lib/store/toast-store';
 import {
   SproutIcon,
-  ChevronRightIcon,
   AlertTriangleIcon,
+  EyeIcon,
+  EyeOffIcon,
 } from '@/components/icons';
 
 export default function LoginPage() {
-  const router = useRouter();
   const { login, isLoading, error, clearError } = useAuthStore();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [rememberMe, setRememberMe] = useState(true);
+  const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string }>({});
+
+  const validateForm = (): boolean => {
+    const errors: { email?: string; password?: string } = {};
+
+    const trimmedIdentifier = email.trim();
+    if (!trimmedIdentifier) {
+      errors.email = 'Please enter your email or username.';
+    } else if (trimmedIdentifier.includes('@')) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(trimmedIdentifier)) {
+        errors.email = 'Please enter a valid email address format.';
+      }
+    } else if (trimmedIdentifier.length < 3) {
+      errors.email = 'Username must be at least 3 characters long.';
+    }
+
+    if (!password) {
+      errors.password = 'Password is required.';
+    } else if (password.length < 4) {
+      errors.password = 'Password must be at least 4 characters long.';
+    }
+
+    setFieldErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email || !password) {
-      toast.error('Please enter your email and password.', 'Required Fields');
+    clearError();
+
+    if (!validateForm()) {
+      toast.error('Please fix the errors indicated in the form.', 'Validation Error');
       return;
     }
 
     setSubmitting(true);
-    clearError();
 
     try {
-      await login({ email, password });
-      toast.success('Successfully authenticated with Edge Hub', 'Welcome');
-      const destination = sessionStorage.getItem('cropfit_redirect') || '/';
-      sessionStorage.removeItem('cropfit_redirect');
-      router.push(destination);
-    } catch {
-      toast.error('Invalid credentials. Please verify your email and password.', 'Authentication Failed');
+      await login({ email: email.trim(), password });
+      toast.success('Successfully authenticated with Greenhouse Hub', 'Welcome');
+
+      // AuthGuard owns post-login navigation, including pending claim links.
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Invalid credentials. Please verify your credentials.';
+      toast.error(msg, 'Authentication Failed');
     } finally {
       setSubmitting(false);
     }
@@ -64,38 +90,54 @@ export default function LoginPage() {
             CropFit Greenhouse
           </h1>
           <p className="text-xs text-slate-500">
-            Sign in to access your local Edge Gateway & Device Orchestrator
+            Sign in to monitor your greenhouses and GreenNode hubs
           </p>
         </div>
 
         {/* Login Card */}
         <div className="bg-white border border-slate-200/90 rounded-2xl p-6 sm:p-8 shadow-xl shadow-slate-200/50 space-y-5">
           {error && (
-            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 flex items-center gap-2.5 text-xs text-rose-700">
-              <AlertTriangleIcon size={16} className="text-rose-600 shrink-0" />
-              <span>{error}</span>
+            <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 flex items-start gap-2.5 text-xs text-rose-700 animate-in fade-in">
+              <AlertTriangleIcon size={16} className="text-rose-600 shrink-0 mt-0.5" />
+              <span className="font-medium leading-relaxed">{error}</span>
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} noValidate className="space-y-4">
+            {/* Email / Username Field */}
             <div className="space-y-1.5">
               <label
                 htmlFor="email"
                 className="block text-xs font-semibold text-slate-700"
               >
-                Email Address
+                Farmer email or username
               </label>
               <input
                 id="email"
-                type="email"
-                required
+                type="text"
+                autoComplete="username"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="name@cropfit.io"
-                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50/80 border border-slate-200 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500 focus:bg-white transition-all"
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  if (fieldErrors.email) {
+                    setFieldErrors((prev) => ({ ...prev, email: undefined }));
+                  }
+                }}
+                placeholder="Your farmer email or username"
+                className={`w-full px-3.5 py-2.5 rounded-xl bg-slate-50/80 border text-sm text-slate-900 placeholder-slate-400 focus:outline-none transition-all ${
+                  fieldErrors.email
+                    ? 'border-rose-400 focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 bg-rose-50/30'
+                    : 'border-slate-200 focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 focus:bg-white'
+                }`}
               />
+              {fieldErrors.email && (
+                <p className="text-[11px] font-medium text-rose-600 pl-1">
+                  {fieldErrors.email}
+                </p>
+              )}
             </div>
 
+            {/* Password Field with Show/Hide toggle */}
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
                 <label
@@ -105,56 +147,61 @@ export default function LoginPage() {
                   Password
                 </label>
               </div>
-              <input
-                id="password"
-                type="password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter your password"
-                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50/80 border border-slate-200 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500 focus:bg-white transition-all"
-              />
-            </div>
-
-            <div className="flex items-center justify-between text-xs pt-1">
-              <label className="flex items-center gap-2 cursor-pointer text-slate-600">
+              <div className="relative">
                 <input
-                  type="checkbox"
-                  checked={rememberMe}
-                  onChange={(e) => setRememberMe(e.target.checked)}
-                  className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 accent-emerald-600"
+                  id="password"
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    if (fieldErrors.password) {
+                      setFieldErrors((prev) => ({ ...prev, password: undefined }));
+                    }
+                  }}
+                  placeholder="Enter your password"
+                  className={`w-full pl-3.5 pr-10 py-2.5 rounded-xl bg-slate-50/80 border text-sm text-slate-900 placeholder-slate-400 focus:outline-none transition-all ${
+                    fieldErrors.password
+                      ? 'border-rose-400 focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 bg-rose-50/30'
+                      : 'border-slate-200 focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 focus:bg-white'
+                  }`}
                 />
-                <span>Remember session</span>
-              </label>
-              <span className="text-slate-400 text-[11px]">
-                Secured by Edge JWT
-              </span>
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors p-1 rounded-md focus:outline-none"
+                >
+                  {showPassword ? <EyeOffIcon size={18} /> : <EyeIcon size={18} />}
+                </button>
+              </div>
+              {fieldErrors.password && (
+                <p className="text-[11px] font-medium text-rose-600 pl-1">
+                  {fieldErrors.password}
+                </p>
+              )}
             </div>
 
+
+            {/* Submit Button */}
             <button
               type="submit"
               disabled={submitting || isLoading}
-              className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm transition-all shadow-md shadow-emerald-600/20 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+              className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-semibold text-sm transition-all shadow-md shadow-emerald-600/20 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
             >
-              {submitting ? 'Authenticating...' : 'Sign In to Gateway'}
+              {submitting ? 'Verifying Credentials...' : 'Sign In to Dashboard'}
             </button>
           </form>
         </div>
 
-        {/* Footer info & subtle admin redirect */}
-        <div className="text-center space-y-2">
+        {/* Footer info: Clean, farmer-focused (no admin portal leakage) */}
+        <div className="text-center space-y-1">
           <p className="text-[11px] text-slate-400">
-            CropFit Smart Greenhouse IoT Hub • Offline-Resilient Local Auth
+            CropFit Smart Greenhouse System
           </p>
-          <div>
-            <Link
-              href="/admin/login"
-              className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-slate-700 transition-colors"
-            >
-              <span>System Administrator? Open Admin Console</span>
-              <ChevronRightIcon size={12} />
-            </Link>
-          </div>
+          <p className="text-[10px] text-slate-400">
+            Need device pairing assistance? Visit <a href="/claim" className="text-emerald-600 hover:underline font-medium">Claim Device</a>.
+          </p>
         </div>
       </div>
     </div>

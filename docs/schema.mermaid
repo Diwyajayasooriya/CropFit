@@ -5,7 +5,7 @@ erDiagram
     NODES ||--o{ NODE_RULES : "has installed"
     RULES ||--o{ NODE_RULES : "installed as"
     NODES ||--|| NODE_IDENTITY : "same hub (nodes.node_id = node_identity.node_uid)"
-    NODES ||--o{ NODE_BACKGROUND_HISTORY : "has background over time (crop, season)"
+    NODES ||--o{ NODE_BACKGROUND_HISTORY : "has background over time (crop, growth stage)"
     NODES |o--o{ RULES : "personalizes (nullable — null = fleet-wide rule)"
     NODES ||--o{ ACTIONS_LOG_CLOUD : "logs actions for"
     CONDITIONS |o--o{ ACTIONS_LOG_CLOUD : "triggers (nullable — null = manual override)"
@@ -60,6 +60,7 @@ erDiagram
         uuid node_id FK "nullable — null = fleet-wide, set = personalized to one hub"
         string scope "fleet or node"
         string crop_type
+        string growth_stage
         string node_type
         json condition
         json action
@@ -81,7 +82,7 @@ erDiagram
         bigint history_id PK
         uuid node_id FK
         string crop_type
-        string season_label
+        string growth_stage
         timestamp started_at
         timestamp ended_at "nullable — null = current background"
     }

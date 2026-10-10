@@ -10,6 +10,7 @@ from api.database import SessionLocal, engine
 from api.routers import actuators, devices, rules, sensors, status, sync
 from api.services.mqtt_publisher import mqtt_publisher
 from api.services.sync_service import sync_service
+from rules_engine import RulesEngine
 from models import Base
 
 # Configure logging
@@ -31,6 +32,16 @@ def run_sync_job():
         db.close()
 
 
+def run_rules_engine_job():
+    """Wrapper to run the rules engine in a background job."""
+    try:
+        # RulesEngine handles its own DB session
+        engine = RulesEngine()
+        engine.process()
+    except Exception as e:
+        log.error("Scheduled rules engine job failed: %s", e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- Startup ---
@@ -47,6 +58,13 @@ async def lifespan(app: FastAPI):
         "interval",
         seconds=settings.SYNC_INTERVAL_SECONDS,
         id="cloud_sync",
+        replace_existing=True
+    )
+    scheduler.add_job(
+        run_rules_engine_job,
+        "interval",
+        seconds=60,  # Run every minute
+        id="rules_engine",
         replace_existing=True
     )
     scheduler.start()

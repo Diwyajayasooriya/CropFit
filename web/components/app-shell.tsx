@@ -24,7 +24,6 @@ import {
   LogOutIcon,
   MenuIcon,
   CloseIcon,
-  ChevronDownIcon,
   ShieldIcon,
 } from './icons';
 
@@ -45,9 +44,8 @@ const navItems: NavItem[] = [
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const { user, logout, switchRole } = useAuthStore();
+  const { user, logout } = useAuthStore();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [roleMenuOpen, setRoleMenuOpen] = useState(false);
   const [hubOnline, setHubOnline] = useState(true);
 
   const roleColors: Record<UserRole, { bg: string; text: string; border: string }> = {
@@ -58,12 +56,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const currentRole = user?.role || 'farmer';
   const roleStyle = roleColors[currentRole];
-
-  const handleRoleChange = (role: UserRole) => {
-    switchRole(role);
-    setRoleMenuOpen(false);
-    toast.info(`Switched active view to ${role.toUpperCase()}`, 'Role Updated');
-  };
 
   const toggleHubStatus = () => {
     setHubOnline((prev) => {
@@ -144,58 +136,60 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           })}
         </nav>
 
-        {/* Edge Hub Status Card */}
-        <div className="p-3 border-t border-slate-100">
-          <div className="p-3 rounded-xl border border-slate-200/80 bg-slate-50/80 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-medium text-slate-600">
-                Greenhouse A Hub
-              </span>
-              <button
-                onClick={toggleHubStatus}
-                title="Click to toggle simulated online/offline status"
-                className="flex items-center gap-1.5 text-[11px] font-semibold cursor-pointer hover:opacity-80 transition-opacity"
-              >
-                {hubOnline ? (
-                  <>
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                    <span className="text-emerald-600">Online</span>
-                  </>
-                ) : (
-                  <>
-                    <span className="w-2 h-2 rounded-full bg-rose-500" />
-                    <span className="text-rose-600">Offline</span>
-                  </>
-                )}
-              </button>
-            </div>
-            <div className="text-[10px] text-slate-400 flex justify-between">
-              <span>ESP32-CH04 Mesh</span>
-              <span>192.168.1.100</span>
+        {/* Edge Hub Status Card - Only shown after onboarding */}
+        {user?.onboarding_completed && (
+          <div className="p-3 border-t border-slate-100">
+            <div className="p-3 rounded-xl border border-slate-200/80 bg-slate-50/80 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-medium text-slate-600">
+                  Greenhouse Hub
+                </span>
+                <button
+                  onClick={toggleHubStatus}
+                  title="Click to toggle simulated online/offline status"
+                  className="flex items-center gap-1.5 text-[11px] font-semibold cursor-pointer hover:opacity-80 transition-opacity"
+                >
+                  {hubOnline ? (
+                    <>
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                      <span className="text-emerald-600">Online</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="w-2 h-2 rounded-full bg-rose-500" />
+                      <span className="text-rose-600">Offline</span>
+                    </>
+                  )}
+                </button>
+              </div>
+              <div className="text-[10px] text-slate-400 flex justify-between">
+                <span>GreenNode Gateway</span>
+                <span>Active</span>
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* User Profile & Role Switcher */}
         <div className="p-3 border-t border-slate-100 relative">
           <div className="flex items-center justify-between p-2 rounded-xl bg-slate-100/80 border border-slate-200/60">
             <div className="flex items-center gap-2.5 min-w-0">
               <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-xs">
-                {user?.first_name?.charAt(0) || 'U'}
+                {((user?.first_name || user?.username || user?.email || 'U')[0]).toUpperCase()}
               </div>
               <div className="min-w-0">
                 <p className="text-xs font-semibold text-slate-900 truncate">
-                  {user ? `${user.first_name} ${user.last_name}` : 'Operator'}
+                  {user?.first_name && user?.last_name
+                    ? `${user.first_name} ${user.last_name}`
+                    : user?.username || user?.email || 'Farmer'}
                 </p>
                 <div className="flex items-center gap-1.5">
-                  <button
-                    onClick={() => setRoleMenuOpen(!roleMenuOpen)}
-                    className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.2 rounded border ${roleStyle.bg} ${roleStyle.text} ${roleStyle.border} hover:opacity-80 transition-opacity cursor-pointer`}
+                  <div
+                    className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded border ${roleStyle.bg} ${roleStyle.text} ${roleStyle.border}`}
                   >
                     <ShieldIcon size={10} />
                     <span className="capitalize">{currentRole}</span>
-                    <ChevronDownIcon size={10} />
-                  </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -208,29 +202,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <LogOutIcon size={16} />
             </button>
           </div>
-
-          {/* Role Selection Popover */}
-          {roleMenuOpen && (
-            <div className="absolute bottom-16 left-3 right-3 p-2 bg-white border border-slate-200 rounded-xl shadow-xl z-40 space-y-1 animate-in fade-in">
-              <div className="px-2 py-1 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                Switch Role View
-              </div>
-              {(['farmer', 'technician', 'admin'] as UserRole[]).map((r) => (
-                <button
-                  key={r}
-                  onClick={() => handleRoleChange(r)}
-                  className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium capitalize flex items-center justify-between transition-colors cursor-pointer ${
-                    currentRole === r
-                      ? 'bg-emerald-50 text-emerald-700 font-bold'
-                      : 'text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  <span>{r}</span>
-                  {currentRole === r && <span className="text-[10px] text-emerald-600">● Active</span>}
-                </button>
-              ))}
-            </div>
-          )}
         </div>
       </aside>
 

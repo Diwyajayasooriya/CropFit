@@ -68,6 +68,7 @@ void setup() {
   snprintf(dataTopic,   sizeof(dataTopic),   "greennode/%s/data",   DEVICE_ID);
   snprintf(cmdTopic,    sizeof(cmdTopic),    "greennode/%s/cmd",    DEVICE_ID);
   snprintf(statusTopic, sizeof(statusTopic), "greennode/%s/status", DEVICE_ID);
+  snprintf(stateTopic, sizeof(stateTopic), "greennode/%s/state", DEVICE_ID);
 
   connectWiFi();
   mqtt.setServer(MQTT_HOST, MQTT_PORT);

@@ -17,7 +17,8 @@ class GreenHouseSerializer(serializers.ModelSerializer):
             'created_at',
             'node_count',
         ]
-        read_only_fields = ['id', 'created_at', 'node_count']
+        read_only_fields = ['id', 'user', 'created_at', 'node_count']
+
 
     def get_node_count(self, obj):
         return obj.nodes.count() if hasattr(obj, 'nodes') else 0

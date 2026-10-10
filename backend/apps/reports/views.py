@@ -27,6 +27,10 @@ class ReportSummaryView(APIView):
 
         # Base query for readings within time window
         readings_qs = ConditionReading.objects.filter(reading_ts__gte=cutoff_ts)
+        user = request.user
+        is_admin = user.is_superuser or getattr(user, 'role', '') == 'admin'
+        if not is_admin:
+            readings_qs = readings_qs.filter(node__greenHouse__user=user)
         if greenhouse_id:
             readings_qs = readings_qs.filter(node__greenHouse_id=greenhouse_id)
 
@@ -46,6 +50,8 @@ class ReportSummaryView(APIView):
 
         # Alert stats
         alerts_qs = Alert.objects.all()
+        if not is_admin:
+            alerts_qs = alerts_qs.filter(greenhouse__user=user)
         if greenhouse_id:
             alerts_qs = alerts_qs.filter(greenhouse_id=greenhouse_id)
 
@@ -54,6 +60,8 @@ class ReportSummaryView(APIView):
 
         # Device stats
         devices_qs = Device.objects.all()
+        if not is_admin:
+            devices_qs = devices_qs.filter(node__greenHouse__user=user)
         if greenhouse_id:
             devices_qs = devices_qs.filter(node__greenHouse_id=greenhouse_id)
 
@@ -101,43 +109,91 @@ class DashboardSummaryView(APIView):
     """
     GET /api/v1/reports/dashboard/
     Combines latest metrics and actuator states for the frontend dashboard.
+    Conforms strictly to frontend DashboardSummary interface with tenant greenhouse isolation.
     """
     permission_classes = [IsFarmer]
 
     def get(self, request):
-        # 1. Get latest readings for tiles
-        latest_readings = ConditionReading.objects.order_by('-reading_ts')[:5]
+        user = request.user
+        greenhouse_id = request.query_params.get('greenhouse')
+
+        # Greenhouse isolation: Admins see all; farmers see their own
+        if getattr(user, 'role', '') == 'admin' or user.is_superuser:
+            greenhouses = GreenHouse.objects.all()
+            if greenhouse_id:
+                greenhouses = greenhouses.filter(id=greenhouse_id)
+        else:
+            greenhouses = GreenHouse.objects.filter(user=user)
+            if greenhouse_id:
+                greenhouses = greenhouses.filter(id=greenhouse_id)
+
+        from apps.node.models.nodeDetails.models import Node
+        from apps.node.models.actuators.models import Actuator
+
+        nodes = Node.objects.filter(greenHouse__in=greenhouses)
+        
+        # Latest two samples per device. A trend requires two real measurements.
         tiles = []
-        for r in latest_readings:
-            tiles.append({
-                "sensor_id": f"SN-{r.id}",
-                "label": "Temperature" if r.temperature else "Humidity",
-                "value": float(r.temperature or r.humidity or 0),
-                "unit": "°C" if r.temperature else "%",
-                "kind": "temperature" if r.temperature else "humidity",
-                "updated_at": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(r.reading_ts))
+        readings = ConditionReading.objects.filter(node__in=nodes)
+        devices = readings.order_by().values_list('node_id', 'device_id').distinct()
+        metrics = [
+            ('temperature', 'temp', 'Ambient Temperature', '°C'),
+            ('humidity', 'hum', 'Relative Humidity', '%'),
+            ('soil_moisture', 'soil', 'Soil Moisture', '%'),
+        ]
+        node_map = {node.id: node for node in nodes}
+        for node_id, device_id in devices:
+            samples = list(readings.filter(node_id=node_id, device_id=device_id).order_by('-reading_ts', '-id')[:2])
+            latest = samples[0]
+            previous = samples[1] if len(samples) > 1 else None
+            for metric, prefix, name, unit in metrics:
+                value = getattr(latest, metric)
+                before = getattr(previous, metric) if previous else None
+                trend = None
+                if value is not None and before is not None:
+                    trend = 'up' if value > before else 'down' if value < before else 'stable'
+                tiles.append({
+                    'sensor_id': f'{prefix}-{node_id}-{device_id}',
+                    'node_id': node_id, 'device_id': device_id,
+                    'sensor_name': f'{name} · {device_id}',
+                    'sensor_kind': metric,
+                    'value': round(float(value), 1) if value is not None else None,
+                    'unit': unit,
+                    'status': 'online' if node_map[node_id].is_online else 'offline',
+                    'trend': trend,
+                    'updated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(latest.reading_ts)),
+                })
+
+        # 2. Fetch actuators
+        actuators = []
+        for a in Actuator.objects.filter(node__in=nodes):
+            kind = a.actuator_type.lower()
+            if kind not in ['pump', 'fan', 'vent', 'light', 'heater']:
+                kind = 'pump'
+            actuators.append({
+                "id": a.id,
+                "node": a.node_id,
+                "confirmed_at": a.confirmed_at,
+                "actuator_id": a.actuator_id,
+                "name": f"{a.actuator_type.title()} ({a.actuator_id})",
+                "actuator_kind": kind,
+                "is_active": bool(a.is_active),
+                "auto_mode": True,
+                "status": "online" if a.node.is_online else "offline",
             })
 
-        # 2. Get actuators
-        actuators_qs = Device.objects.filter(device_type='actuator')
-        actuators = [{
-            "actuator_id": a.device_id,
-            "name": a.name,
-            "is_active": a.is_online, # Mapping online status to active for simplicity
-            "kind": "relay"
-        } for a in actuators_qs]
-
-        # 3. Overall status
-        active_alerts = Alert.objects.filter(is_resolved=False).count()
-        status_msg = "System Healthy. All conditions within optimal range."
-        overall_status = "healthy"
+        # 3. Overall status & active alerts
+        active_alerts = Alert.objects.filter(greenhouse__in=greenhouses, is_resolved=False).count()
         if active_alerts > 0:
-            status_msg = f"System Warning. {active_alerts} active alerts detected."
+            status_msg = f"System Warning: {active_alerts} active alert(s) detected."
             overall_status = "warning"
+        else:
+            status_msg = "No unresolved alerts. Review readings against your crop's configured thresholds."
+            overall_status = "healthy"
 
         return Response({
             "message": status_msg,
             "overall_status": overall_status,
             "tiles": tiles,
             "actuators": actuators
-        })
+        }, status=status.HTTP_200_OK)

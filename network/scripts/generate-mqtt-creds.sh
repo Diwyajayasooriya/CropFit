@@ -40,6 +40,7 @@ while IFS=',' read -r mac ip iface tier rate_kbit ceil_kbit name; do
             echo "user $name"
             echo "topic write greennode/$name/status"
             echo "topic read greennode/$name/cmd"
+            echo "topic write greennode/$name/ack"
         } >> "$ACL_FILE"
     else
         # sensor (default): reports data + status only

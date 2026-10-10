@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 
 from api.config import settings
 from api.database import SessionLocal
-from models import ActionLog, Condition
+from models import ActionLog, Condition, ConnectedDevice
+
 
 log = logging.getLogger("edge.sync_service")
 
@@ -141,7 +142,94 @@ class CloudSyncService:
         if self.last_sync_status != "network_error" and not self.last_sync_status.startswith("failed"):
             self.last_sync_status = "success"
 
+        # 3. Pull latest device allowlist from Cloud (farmer added sensors/actuators via Web)
+        try:
+            self.sync_devices_from_cloud(db)
+        except Exception as e:
+            log.warning("Device configuration down-sync failed: %s", e)
+
         return results
+
+    def sync_devices_from_cloud(self, db: Session) -> Dict[str, int]:
+        """
+        Pulls authorized sensors and actuators registered by the farmer on the CropFit Web Dashboard
+        and registers/updates them in the local SQLite connected_devices table.
+        """
+        results = {"added_sensors": 0, "added_actuators": 0}
+        headers = {"Content-Type": "application/json"}
+        if settings.CLOUD_SYNC_TOKEN:
+            headers["Authorization"] = f"Bearer {settings.CLOUD_SYNC_TOKEN}"
+
+        url = f"{settings.CLOUD_BACKEND_URL.rstrip('/')}/api/v1/nodes/config/?node_id={settings.NODE_ID}"
+
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                resp = client.get(url, headers=headers)
+
+            if resp.status_code != 200:
+                log.debug("Cloud config endpoint returned %d: %s", resp.status_code, resp.text[:100])
+                return results
+
+            config_data = resp.json()
+            sensors = config_data.get("sensors", [])
+            actuators = config_data.get("actuators", [])
+            now_ts = int(time.time())
+
+            # Sync sensors
+            for s in sensors:
+                dev_id = s.get("sensor_id")
+                if not dev_id:
+                    continue
+                existing = db.execute(
+                    select(ConnectedDevice).where(ConnectedDevice.device_id == dev_id)
+                ).scalar_one_or_none()
+
+                if existing:
+                    existing.revoked = not s.get("is_active", True)
+                    existing.device_type = "sensor"
+                else:
+                    new_dev = ConnectedDevice(
+                        device_id=dev_id,
+                        device_type="sensor",
+                        name=f"{s.get('sensor_type', 'Sensor')} ({s.get('unit', '')})",
+                        revoked=not s.get("is_active", True),
+                        registered_ts=now_ts,
+                    )
+                    db.add(new_dev)
+                    results["added_sensors"] += 1
+
+            # Sync actuators
+            for a in actuators:
+                dev_id = a.get("actuator_id")
+                if not dev_id:
+                    continue
+                existing = db.execute(
+                    select(ConnectedDevice).where(ConnectedDevice.device_id == dev_id)
+                ).scalar_one_or_none()
+
+                if existing:
+                    existing.revoked = not a.get("is_active", True)
+                    existing.device_type = "actuator"
+                else:
+                    new_dev = ConnectedDevice(
+                        device_id=dev_id,
+                        device_type="actuator",
+                        name=a.get("actuator_type", "Actuator"),
+                        revoked=not a.get("is_active", True),
+                        registered_ts=now_ts,
+                    )
+                    db.add(new_dev)
+                    results["added_actuators"] += 1
+
+            db.commit()
+            if results["added_sensors"] > 0 or results["added_actuators"] > 0:
+                log.info("Synced devices from cloud: added %d sensors, %d actuators", 
+                         results["added_sensors"], results["added_actuators"])
+        except Exception as e:
+            log.warning("Failed to sync device config from cloud: %s", e)
+
+        return results
+
 
 
 sync_service = CloudSyncService()

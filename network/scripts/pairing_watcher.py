@@ -312,6 +312,7 @@ def generate_mqtt_credentials(device_id: str, device_type: str) -> str:
         if device_type == "actuator":
             f.write(f"topic write greennode/{device_id}/status\n")
             f.write(f"topic read greennode/{device_id}/cmd\n")
+            f.write(f"topic write greennode/{device_id}/ack\n")
         else:
             f.write(f"topic write greennode/{device_id}/data\n")
             f.write(f"topic write greennode/{device_id}/status\n")

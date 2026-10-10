@@ -1,0 +1,24 @@
+[Unit]
+Description=CropFit GreenNode Edge Hub Daemon
+After=network-online.target NetworkManager.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/cropfit-edge
+EnvironmentFile=-/etc/cropfit/environment
+StateDirectory=cropfit
+ExecStart=/opt/cropfit-edge/.venv/bin/python /opt/cropfit-edge/app/main.py
+Restart=always
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+
+# Security sandbox flags
+ProtectSystem=full
+ProtectHome=read-only
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

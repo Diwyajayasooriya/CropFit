@@ -10,6 +10,7 @@ import React, { useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuthStore } from '@/lib/store/auth-store';
 import { SproutIcon } from './icons';
+import { loginDestination, safeReturnPath } from '@/lib/navigation';
 
 interface AuthGuardProps {
   children: React.ReactNode;
@@ -20,7 +21,7 @@ const PUBLIC_ROUTES = ['/login', '/admin/login'];
 export function AuthGuard({ children }: AuthGuardProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const { isAuthenticated, isLoading, hydrate } = useAuthStore();
+  const { isAuthenticated, isLoading, hydrate, user } = useAuthStore();
 
   useEffect(() => {
     hydrate();
@@ -39,21 +40,21 @@ export function AuthGuard({ children }: AuthGuardProps) {
         router.replace('/admin/login');
       } else {
         if (typeof window !== 'undefined') {
-          sessionStorage.setItem('cropfit_redirect', pathname);
+          sessionStorage.setItem('cropfit_redirect', pathname + window.location.search);
         }
-        router.replace('/login');
+        router.replace(`/login?redirect=${encodeURIComponent(pathname + window.location.search)}`);
       }
     } else if (isAuthenticated && isPublic) {
       const redirectUrl =
         pathname === '/admin/login'
-          ? sessionStorage.getItem('cropfit_admin_redirect') || '/admin'
-          : sessionStorage.getItem('cropfit_redirect') || '/';
+          ? safeReturnPath(sessionStorage.getItem('cropfit_admin_redirect')) || '/admin'
+          : loginDestination(window.location.search, sessionStorage.getItem('cropfit_redirect'), user?.onboarding_completed);
 
       sessionStorage.removeItem('cropfit_redirect');
       sessionStorage.removeItem('cropfit_admin_redirect');
       router.replace(redirectUrl);
     }
-  }, [isAuthenticated, isLoading, pathname, router]);
+  }, [isAuthenticated, isLoading, pathname, router, user]);
 
   // While checking auth status on protected pages, show a calm loading pulse
   if (isLoading && !PUBLIC_ROUTES.includes(pathname)) {
@@ -68,7 +69,7 @@ export function AuthGuard({ children }: AuthGuardProps) {
               CropFit Smart Greenhouse
             </h2>
             <p className="text-xs text-zinc-500 dark:text-zinc-400">
-              Connecting to Edge Gateway...
+              Restoring your CropFit session...
             </p>
           </div>
         </div>
@@ -76,5 +77,6 @@ export function AuthGuard({ children }: AuthGuardProps) {
     );
   }
 
+  if (!isAuthenticated && !PUBLIC_ROUTES.includes(pathname)) return null;
   return <>{children}</>;
 }

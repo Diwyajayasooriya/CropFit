@@ -5,6 +5,8 @@ from rest_framework.response import Response
 
 from apps.alerts.models import Alert
 from apps.alerts.serializers import AlertSerializer
+from apps.authentication.Permitions.permissions import IsFarmer
+from rest_framework.exceptions import PermissionDenied
 
 
 class AlertViewSet(viewsets.ModelViewSet):
@@ -13,10 +15,13 @@ class AlertViewSet(viewsets.ModelViewSet):
     """
     queryset = Alert.objects.all().order_by('-created_at')
     serializer_class = AlertSerializer
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [IsFarmer]
 
     def get_queryset(self):
         qs = super().get_queryset()
+        user = self.request.user
+        if not (user.is_superuser or getattr(user, 'role', '') == 'admin'):
+            qs = qs.filter(greenhouse__user=user)
         greenhouse_id = self.request.query_params.get('greenhouse')
         severity = self.request.query_params.get('severity')
         resolved = self.request.query_params.get('resolved')
@@ -30,6 +35,18 @@ class AlertViewSet(viewsets.ModelViewSet):
             qs = qs.filter(is_resolved=is_res)
 
         return qs
+
+    def save_alert(self, serializer):
+        greenhouse = serializer.validated_data.get('greenhouse', getattr(serializer.instance, 'greenhouse', None))
+        node = serializer.validated_data.get('node', getattr(serializer.instance, 'node', None))
+        user = self.request.user
+        if not (user.is_superuser or getattr(user, 'role', '') == 'admin'):
+            if not greenhouse or greenhouse.user_id != user.id or (node and node.greenHouse_id != greenhouse.id):
+                raise PermissionDenied('Choose one of your own greenhouses.')
+        serializer.save()
+
+    perform_create = save_alert
+    perform_update = save_alert
 
     @action(detail=True, methods=['patch'])
     def acknowledge(self, request, pk=None):

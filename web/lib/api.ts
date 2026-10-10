@@ -1,22 +1,36 @@
 // ============================================================
 // CropFit — Central Fetch Wrapper
 // Attaches JWT token to every request.
-// Falls back to mock data when the backend is unreachable.
+// API failures are surfaced to callers for explicit error states.
 // ============================================================
 
 import type { AuthTokens, ApiError } from '@/types';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000/api/v1';
+// Base server URL (no path suffix)
+const SERVER_BASE = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000')
+  .replace(/\/api\/?$/, '')
+  .replace(/\/$/, '');
+
+// Resolve endpoint: paths starting with /auth/ go to /api/auth/, everything else to /api/v1/
+function resolveUrl(endpoint: string): string {
+  if (endpoint.startsWith('http')) return endpoint;
+  if (endpoint.startsWith('/auth/')) return `${SERVER_BASE}/api${endpoint}`;
+  return `${SERVER_BASE}/api/v1${endpoint}`;
+}
 
 // --------------- Token helpers ---------------
 
 let tokens: AuthTokens | null = null;
 
-export function setTokens(t: AuthTokens) {
+export function setTokens(t: AuthTokens, role?: string) {
   tokens = t;
   if (typeof window !== 'undefined') {
     localStorage.setItem('cropfit_tokens', JSON.stringify(t));
     document.cookie = `cropfit_auth=1; path=/; max-age=604800; SameSite=Lax`;
+    // Store role for Next.js middleware to read (server-side admin protection)
+    if (role) {
+      document.cookie = `cropfit_role=${role}; path=/; max-age=604800; SameSite=Lax`;
+    }
   }
 }
 
@@ -25,8 +39,14 @@ export function getTokens(): AuthTokens | null {
   if (typeof window !== 'undefined') {
     const raw = localStorage.getItem('cropfit_tokens');
     if (raw) {
-      tokens = JSON.parse(raw) as AuthTokens;
-      return tokens;
+      try {
+        const parsed = JSON.parse(raw) as AuthTokens;
+        if (typeof parsed.access !== 'string' || typeof parsed.refresh !== 'string') throw new Error('Invalid tokens');
+        tokens = parsed;
+        return tokens;
+      } catch {
+        clearTokens();
+      }
     }
   }
   return null;
@@ -36,7 +56,9 @@ export function clearTokens() {
   tokens = null;
   if (typeof window !== 'undefined') {
     localStorage.removeItem('cropfit_tokens');
+    localStorage.removeItem('cropfit_user');
     document.cookie = 'cropfit_auth=; path=/; max-age=0; SameSite=Lax';
+    document.cookie = 'cropfit_role=; path=/; max-age=0; SameSite=Lax';
   }
 }
 
@@ -48,7 +70,7 @@ async function refreshAccessToken(): Promise<AuthTokens> {
   const current = getTokens();
   if (!current?.refresh) throw new Error('No refresh token');
 
-  const res = await fetch(`${API_BASE}/token/refresh/`, {
+  const res = await fetch(resolveUrl('/auth/token/refresh/'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ refresh: current.refresh }),
@@ -109,9 +131,20 @@ export class ApiRequestError extends Error {
   data: ApiError;
 
   constructor(status: number, data: ApiError) {
-    super(data.detail || `API error ${status}`);
+    // Extract first error message from DRF error structures
+    let message = data.detail || data.message || data.error;
+    if (!message && typeof data === 'object' && data !== null) {
+      const entries = Object.entries(data);
+      if (entries.length > 0) {
+        const [field, val] = entries[0];
+        const valText = Array.isArray(val) ? val[0] : String(val);
+        message = field && field !== 'non_field_errors' ? `${field}: ${valText}` : String(valText);
+      }
+    }
+    super(message || `API error ${status}`);
     this.status = status;
     this.data = data;
+
   }
 }
 
@@ -131,13 +164,17 @@ export async function api<T>(endpoint: string, options: FetchOptions = {}): Prom
     } catch {
       // If token refresh fails, redirect to login
       if (typeof window !== 'undefined') {
-        window.location.href = '/login';
+        if (!window.location.pathname.endsWith('/login')) {
+          const destination = window.location.pathname + window.location.search;
+          sessionStorage.setItem('cropfit_redirect', destination);
+          window.location.href = `/login?redirect=${encodeURIComponent(destination)}`;
+        }
       }
       throw new Error('Authentication required');
     }
   }
 
-  const url = endpoint.startsWith('http') ? endpoint : `${API_BASE}${endpoint}`;
+  const url = resolveUrl(endpoint);
 
   const res = await fetch(url, {
     ...rest,
