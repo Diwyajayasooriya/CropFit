@@ -15,6 +15,10 @@ erDiagram
     CONNECTED_DEVICES ||--o{ CONDITIONS_EDGE : "produces"
     CONNECTED_DEVICES ||--o{ ACTIONS_LOG : "receives command"
     NODE_RULES ||--o{ NODE_RULES_CACHE : "pulled as"
+
+    %% ACTION_POLICY has no per-node scope, so every hub pulls the same full table —
+    %% a periodic fleet-wide pull, not a per-node relationship like NODE_RULES above.
+    ACTION_POLICY ||--o{ ACTION_POLICY_CACHE : "pulled as (fleet-wide, identical on every hub)"
     CONDITIONS_EDGE ||--o{ ACTIONS_LOG : "triggers (nullable)"
 
     %% ===== SYNC PIPELINE (batch job, not a live FK) =====
@@ -62,8 +66,7 @@ erDiagram
         string crop_type
         string growth_stage
         string node_type
-        json condition
-        json action
+        json condition "threshold band only — action lives in ACTION_POLICY"
         int priority
         float confidence
         float support
@@ -76,6 +79,16 @@ erDiagram
         uuid rule_id FK
         timestamp installed_at
         boolean active
+    }
+
+    ACTION_POLICY {
+        int policy_id PK
+        string variable "temperature, humidity, soil_moisture..."
+        string direction "above or below threshold edge"
+        float gap_min "absolute excursion"
+        float gap_max "nullable — open-ended top bucket"
+        json action
+        string model_version
     }
 
     NODE_BACKGROUND_HISTORY {
@@ -129,8 +142,18 @@ erDiagram
     NODE_RULES_CACHE {
         int rule_id PK
         json condition_json
-        json action_json
         int version
+        timestamp updated_at
+    }
+
+    ACTION_POLICY_CACHE {
+        int policy_id PK
+        string variable
+        string direction
+        float gap_min
+        float gap_max "nullable"
+        json action_json
+        string model_version
         timestamp updated_at
     }
 

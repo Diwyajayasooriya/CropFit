@@ -18,11 +18,12 @@ The split exists because control-loop decisions have to keep working even when t
                     │  node_background_history (crop/stage)     │
                     │  conditions   (hypertable, ML training)   │
                     │  actions_log_cloud (synced action audit)  │
-                    │  rules        (derived from conditions)   │
+                    │  rules        (thresholds — per crop/stage) │
+                    │  action_policy (global, gap → action)     │
                     │  node_rules   (which rules run where)     │
                     └───────────────▲───────────────────────────┘
                                     │  batch sync (periodic push)
-                                    │  rule pull  (periodic pull)
+                                    │  rule + policy pull (periodic pull)
                     ┌───────────────┴───────────────────────────┐
                     │            EDGE / LOCAL TIER               │
                     │         (SQLite, on the RPi4 hub)          │
@@ -30,7 +31,8 @@ The split exists because control-loop decisions have to keep working even when t
                     │  node_identity     (factory-code identity)  │
                     │  connected_devices (paired sub-node allowlist) │
                     │  conditions        (real-time sensor log)   │
-                    │  node_rules_cache  (offline rule copy)      │
+                    │  node_rules_cache  (offline threshold copy) │
+                    │  action_policy_cache (offline, fleet-wide)  │
                     │  actions_log       (actuator command audit) │
                     └─────────────────────────────────────────────┘
 ```
@@ -95,7 +97,9 @@ The large greenhouse-conditions dataset used for ML. This is an aggregate/append
 > **Note:** an earlier version of this table carried an `action_taken` JSON field inline. That's been removed in favor of `actions_log_cloud` (§2, cloud tier) — the flattened field had no way to distinguish a farmer's manual action from one the system already took automatically, which matters for training (see §2.1 below).
 
 ### `rules`
-Rules mined from `conditions` (see §5). Most rules are fleet-wide — defined per crop type and reusable across every hub growing that crop — but a rule can also be personalized to a single hub once that hub has enough of its own history to justify drifting from the fleet default.
+Thresholds mined from `conditions` (see §5) — **not** actions. Most rules are fleet-wide — defined per crop type and growth stage, reusable across every hub in that state — but a rule can also be personalized to a single hub once that hub has enough of its own history to justify drifting from the fleet default.
+
+The `action` field that used to live here is gone. Baking a crop-specific action into a crop-specific threshold row meant the action side could never be reused across crops — a tomato hub's "35°C → fan on" split means nothing to a lettuce hub whose comfort band sits at a different absolute range. This table now says *whether* a hub is out of band and by how much (the gap); `action_policy` (below) says what a gap of that size and direction means, globally, regardless of crop.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -103,10 +107,9 @@ Rules mined from `conditions` (see §5). Most rules are fleet-wide — defined p
 | node_id | uuid, FK → nodes, nullable | null = fleet-wide rule; set = personalized to this one hub |
 | scope | string | `fleet` \| `node` — makes the `node_id` nullability explicit and gives the retraining job a clean way to find "the personalized rule for this hub" without inferring it from nullability alone |
 | crop_type / growth_stage / node_type | string | what context the rule applies to — matched against `node_background_history` for the crop/stage part |
-| condition | json | e.g. `{"temperature": {"op": ">", "value": 32}}` |
-| action | json | e.g. `{"device_type": "fan", "command": "on"}` |
+| condition | json | the threshold band, e.g. `{"temperature": {"min": 24, "max": 30}}` |
 | priority | int | resolves conflicts when multiple rules fire — a personalized (`scope = node`) rule should be given higher priority than the fleet default it overrides |
-| confidence / support | float | training metrics from the model |
+| confidence / support | float | fit-quality metrics from the training run |
 | model_version | string | |
 | status | string | draft / active / deprecated |
 
@@ -134,30 +137,44 @@ Synced copy of each hub's edge `actions_log`. This replaces `conditions.action_t
 | condition_reading_id | bigint, FK → conditions.reading_id, nullable | the reading that triggered this action; null for manual overrides |
 | executed_at | timestamp | |
 
+### `action_policy`
+The global action model's output — **one table for the whole fleet**, not one per crop or per hub. `rules` answers "is this hub out of band, and by how much"; `action_policy` answers "given an excursion of this size, in this direction, what should happen". That answer is crop-agnostic: a +5°C gap means the same thing physically for a tomato hub and a lettuce hub, so one row covers both.
+
+| Field | Type | Notes |
+|---|---|---|
+| policy_id | serial, PK | |
+| variable | string | `temperature`, `humidity`, `soil_moisture`, ... — one policy set per sensed variable |
+| direction | string | `above` \| `below` — which side of the threshold band; kept separate because "too hot" and "too cold" need different actuators |
+| gap_min | float | lower bound of this bucket, as an **absolute** excursion (magnitude past the band edge), e.g. `2` |
+| gap_max | float, nullable | upper bound, e.g. `5`; null = open-ended top bucket |
+| action | json | e.g. `{"device_type": "fan", "command": "on", "intensity": "low"}` |
+| model_version | string | |
+
 ---
 
 # GreenNode — Database Setup for the ML Rule-Mining Pipeline
 
 ## 1. How the database and the ML pipeline relate
 
-The ML model (a decision tree, per the design document) doesn't train on a separate dataset — it trains directly on `conditions`, joined against `node_background_history` (for crop/growth-stage context) and `actions_log_cloud` (for the label). That's the core design decision to understand before touching SQL:
+There are now **two independent training pipelines**, not one:
+
+- **Threshold fitting** (→ `rules`): per crop and growth stage, what does a comfortable range look like? A statistics problem over `conditions` history — no action label required.
+- **Action-policy fitting** (→ `action_policy`): given an excursion of a certain size and direction, what do farmers actually do? Supervised learning over `actions_log_cloud`, trained on the **gap** (`|reading − nearest threshold edge|`) rather than the raw reading — which is what makes one model correct for every crop and hub at once.
 
 ```
-sensor readings  ─────►  conditions (hypertable)  ───┐
-                                                       │
-node_background_history (crop/stage) ──────────────────┼─────►  training query
-                                                       │
-actions_log_cloud (triggered_by='manual') ────────────┘
-                                                                │
-                                                                ▼
-                                                    DecisionTreeClassifier.fit()
-                                                                │
-                                                                ▼
-                                                    one row per leaf  ─────►  rules table
-                                                                │
-                                                                ▼
-                                              node_rules (which hub runs which rule)
+conditions (hypertable) ──┐
+                           ├──►  percentile fit, grouped by       ──►  rules
+node_background_history ──┘      (crop_type, growth_stage)            (thresholds)
+                                                                          │ gives each reading
+                                                                          │ its active threshold
+                                                                          ▼
+conditions ──► gap = |reading − nearest threshold edge| ──┐
+                                                            ├──► DecisionTreeClassifier.fit() ──► action_policy
+actions_log_cloud (triggered_by='manual') ────────────────┘     per (variable, direction),        (global)
+                                                                  no crop_type filter
 ```
+
+At runtime a hub does two lookups: it evaluates its cached `rules` to see whether it is outside its band (and by how much), then looks that gap up in its cached `action_policy` to decide what to do.
 
 So the schema has to satisfy two different access patterns at once:
 
@@ -206,8 +223,7 @@ CREATE TABLE rules (
     crop_type     TEXT,
     growth_stage  TEXT,
     node_type     TEXT,
-    condition     JSONB NOT NULL,   -- e.g. {"temperature": {"op": ">", "value": 32}}
-    action        JSONB NOT NULL,   -- e.g. {"device_type": "fan", "command": "on"}
+    condition     JSONB NOT NULL,   -- e.g. {"temperature": {"min": 24, "max": 30}}
     priority      INTEGER NOT NULL DEFAULT 0,
     confidence    DOUBLE PRECISION, -- from the training run
     support       DOUBLE PRECISION, -- from the training run
@@ -236,6 +252,22 @@ CREATE INDEX idx_actions_log_cloud_node_ts ON actions_log_cloud (node_id, execut
 ```
 
 `triggered_by` is the field that makes this table the label source rather than `conditions.action_taken`: it's what lets the training query in §4 select only `manual` actions as the imitation-learning signal, instead of mixing in the model's own past `rule`/`ml` decisions.
+
+### 2.4 `action_policy` — the global action model's output
+
+```sql
+CREATE TABLE action_policy (
+    policy_id     SERIAL PRIMARY KEY,
+    variable      TEXT NOT NULL,    -- 'temperature', 'humidity', ...
+    direction     TEXT NOT NULL,    -- 'above' | 'below'
+    gap_min       DOUBLE PRECISION NOT NULL,  -- absolute excursion
+    gap_max       DOUBLE PRECISION,           -- nullable: open-ended top bucket
+    action        JSONB NOT NULL,   -- e.g. {"device_type": "fan", "command": "on", "intensity": "low"}
+    model_version TEXT
+);
+```
+
+Deliberately no `crop_type`, `growth_stage`, or `node_id` column — that absence is the point. A crop-scoped action table can't generalize to a crop it has never seen; a gap-scoped one already has.
 
 ---
 
@@ -326,76 +358,106 @@ This automatically drops chunks older than the interval. **Be careful with this 
 
 ---
 
-## 4. The training query itself
+## 4. The training queries
 
-This is the SQL the training job runs to pull a labelled dataset for one crop type and growth stage before handing it to scikit-learn. Three changes from the earlier version: it joins `node_background_history` for crop type *and* growth stage instead of misusing `nodes.node_type` (which is hardware, not crop) or a calendar season (which doesn't drive thresholds in a controlled environment); and it joins `actions_log_cloud` filtered to `triggered_by = 'manual'` instead of reading `conditions.action_taken`, so the label reflects farmer judgment rather than the system's own past decisions.
+Two separate jobs, not one — they share no query and no model.
+
+### 4a. Threshold fitting → `rules`
+
+No action label is needed here: this is descriptive statistics over a crop/stage's own historical range, not classification.
 
 ```sql
 SELECT
-    c.temperature,
-    c.humidity,
-    c.soil_moisture,
-    c.light,
-    c.co2,
-    EXTRACT(HOUR FROM c.ts) AS hour_of_day,
-    a.action
+    percentile_cont(0.05) WITHIN GROUP (ORDER BY c.temperature) AS temp_low,
+    percentile_cont(0.95) WITHIN GROUP (ORDER BY c.temperature) AS temp_high,
+    count(*) AS support
 FROM conditions c
 JOIN node_background_history bg
     ON bg.node_id = c.node_id
    AND c.ts >= bg.started_at
    AND (bg.ended_at IS NULL OR c.ts < bg.ended_at)
-JOIN actions_log_cloud a
-    ON a.condition_reading_id = c.reading_id
 WHERE bg.crop_type = 'tomato'
   AND bg.growth_stage = 'flowering'
-  AND a.triggered_by = 'manual'
   AND c.ts >= now() - INTERVAL '90 days';
 ```
 
-For the **fleet-wide** run this is the whole query — it pools every hub currently growing that crop at that stage. A **personalized** run for one hub adds `AND c.node_id = :node_id` and writes its output rows with that `node_id` and `scope = 'node'` set on `rules`, rather than leaving them fleet-wide.
+The 5th/95th percentile band is a starting point, not a fixed choice. Bounds should be anchored on agronomic priors for that crop/stage where available, with the fleet's realized data pulling the band toward what is actually achievable as history accumulates (priors first, evidence-adjusted over time). Repeat per variable to build the full `condition` json.
 
-Feed this into the training script:
+```python
+def train_rules_for(crop_type: str, growth_stage: str, db_session, node_id: str | None = None):
+    # node_id=None -> fleet-wide run, pooled across every hub growing crop_type at this stage
+    # node_id set  -> personalized run, scoped to that one hub's own history
+    stats = fit_threshold_bands(db_session, crop_type, growth_stage, node_id)  # the query above, per variable
+    db_session.add(models.Rule(
+        crop_type=crop_type, growth_stage=growth_stage,
+        node_id=node_id, scope="node" if node_id else "fleet",
+        condition=stats.as_condition_json(),
+        support=stats.support, confidence=stats.confidence,
+        model_version=new_version_tag(), status="draft",
+        priority=10 if node_id else 0,   # personalized rules outrank fleet defaults
+    ))
+    db_session.commit()
+```
+
+### 4b. Action-policy fitting → `action_policy`
+
+This one needs `actions_log_cloud`, but the feature is the **gap**, not the raw reading, and there is no crop filter anywhere — which is what makes the result usable fleet-wide.
+
+```sql
+SELECT
+    abs(c.temperature - CASE
+        WHEN c.temperature > (r.condition->'temperature'->>'max')::float
+            THEN (r.condition->'temperature'->>'max')::float
+        ELSE (r.condition->'temperature'->>'min')::float
+    END) AS gap,
+    CASE WHEN c.temperature > (r.condition->'temperature'->>'max')::float
+        THEN 'above' ELSE 'below' END AS direction,
+    a.action
+FROM conditions c
+JOIN actions_log_cloud a ON a.condition_reading_id = c.reading_id
+JOIN node_rules nr ON nr.node_id = c.node_id AND nr.active
+JOIN rules r ON r.rule_id = nr.rule_id AND r.status = 'active'
+WHERE a.triggered_by = 'manual'
+  AND (c.temperature > (r.condition->'temperature'->>'max')::float
+       OR c.temperature < (r.condition->'temperature'->>'min')::float)
+  AND c.ts >= now() - INTERVAL '90 days';
+```
+
+Runs once per `variable` across the **entire fleet** — no `crop_type` or `node_id` filter — because the premise of `action_policy` is that a given gap means the same thing whichever crop produced it.
 
 ```python
 from sklearn.tree import DecisionTreeClassifier
 
-def train_rules_for(crop_type: str, growth_stage: str, db_session, node_id: str | None = None):
-    # node_id=None -> fleet-wide run, pooled across every hub growing crop_type at this stage
-    # node_id set  -> personalized run, scoped to that one hub's own history
-    X, y = load_training_data(db_session, crop_type, growth_stage, node_id)   # runs the query above
-    clf = DecisionTreeClassifier(max_depth=4, min_samples_leaf=20)
-    clf.fit(X, y)
-    for leaf_condition, leaf_action, support, confidence in extract_leaves(clf, X, y):
-        db_session.add(models.Rule(
-            crop_type=crop_type,
-            growth_stage=growth_stage,
-            node_id=node_id,
-            scope="node" if node_id else "fleet",
-            condition=leaf_condition,
-            action=leaf_action,
-            support=support,
-            confidence=confidence,
-            model_version=new_version_tag(),
-            status="draft",
-            priority=10 if node_id else 0,  # personalized rules outrank fleet defaults
-        ))
+def train_action_policy_for(variable: str, db_session):
+    X, y = load_gap_training_data(db_session, variable)   # one row per (gap, direction) -> action
+    for direction in ("above", "below"):
+        mask = X.direction == direction
+        clf = DecisionTreeClassifier(max_depth=3, min_samples_leaf=30)
+        clf.fit(X.loc[mask, ["gap"]], y[mask])
+        for gap_min, gap_max, action, support in extract_gap_buckets(clf):
+            db_session.add(models.ActionPolicy(
+                variable=variable, direction=direction,
+                gap_min=gap_min, gap_max=gap_max,
+                action=action, model_version=new_version_tag()))
     db_session.commit()
 ```
 
-> **Note:** `extract_leaves()` is a placeholder for logic you write against the fitted tree's `tree_.feature`, `tree_.threshold` and `tree_.value` attributes — it isn't a built-in scikit-learn function. Verify those attribute names against the current scikit-learn docs before implementing; internal estimator APIs are exactly the kind of detail worth double-checking rather than trusting from memory.
+> **Note:** `extract_gap_buckets()` is a placeholder for logic you write against the fitted tree's `tree_.feature`, `tree_.threshold` and `tree_.value` attributes — it is not a built-in scikit-learn function. Verify those attribute names against the current scikit-learn docs before implementing.
 
 ---
 
 ## 5. Summary of the flow
 
 1. Hubs write raw sensor readings into `conditions`, and every action (manual or automated) into edge `actions_log`, continuously.
-2. `create_hypertable` chunks `conditions` by time so writes stay fast as data accumulates; `actions_log` syncs to `actions_log_cloud` on the same batch pattern.
+2. `create_hypertable` chunks `conditions` by time; `actions_log` syncs to `actions_log_cloud` on the same batch pattern.
 3. Older chunks get compressed on a schedule, keeping storage down without deleting anything.
-4. (Optional) continuous aggregates pre-compute rolled-up features if the model needs them.
-5. A scheduled job queries `conditions` (joined to `node_background_history` for crop type and growth stage, and to `actions_log_cloud` filtered to `triggered_by = 'manual'` for the label) as labelled training data, fits a decision tree, and writes the result into `rules` as new `draft` rows tied to a `model_version` — fleet-wide by default, or scoped to one `node_id` for a personalized retrain.
-6. Once reviewed/approved, `rules` rows flip to `active` and get linked to specific hubs via `node_rules`, which the hub then pulls down into its local `node_rules_cache` to run offline. A personalized rule's higher `priority` lets it override its fleet-wide counterpart on that one hub without disabling the rule anywhere else.
+4. (Optional) continuous aggregates pre-compute rolled-up features if either model needs them.
+5. **Threshold job** (§4a): computes percentile-based bands per crop/growth stage from `conditions` alone and writes `draft` rows into `rules` — fleet-wide by default, or scoped to one `node_id` for a personalized retrain.
+6. **Action-policy job** (§4b): computes each reading's gap against its hub's active threshold, joins `actions_log_cloud` filtered to `triggered_by = 'manual'`, and fits one small decision tree per `(variable, direction)` across the whole fleet, writing into `action_policy`.
+7. Once reviewed/approved, `rules` rows flip to `active` and link to hubs via `node_rules` → `node_rules_cache`. `action_policy` rows flip to active and are pulled to **every** hub's `action_policy_cache`, since the same policy applies fleet-wide.
+8. At runtime a hub evaluates its cached thresholds first (out of band, and by how much), then looks that gap up in its cached action policy. A personalized rule's higher `priority` only decides which threshold wins; the action-policy lookup afterward is identical.
 
-This is the minimum you need to get the database and the ML pipeline talking to each other correctly. Retention policies and continuous aggregates (§3, Steps 5–6) are refinements to add once the pilot is generating real data volume — they're not required to get a first training run working.
+This is the minimum needed to get the database and the ML pipelines talking to each other correctly. Retention policies and continuous aggregates (§3, Steps 5–6) are refinements for once the pilot generates real data volume.
 
 ## 3. Edge / Local tier — Node Database Implementation
 
@@ -448,7 +510,7 @@ The allowlist of third-party sensors/actuators (ESP32, Pico W, etc.) this hub tr
 | last_seen | timestamp | |
 | synced | boolean | whether the pairing record has been pushed to the cloud registry |
 
-Splitting the old single `device_type` (`sensor`/`actuator`) into `device_category` + `device_type` generalizes device identification: a node can now be queried or matched by exact capability ("give me this node's `humidity` sensor") instead of by its free-text `label`, which was never meant to be parsed. It also directly lines up with the `device_type` key already used in `rules.action` and `actions_log.action` (e.g. `{"device_type": "fan", "command": "on"}`) — the same vocabulary identifies a device here and drives what a rule targets there. New device types (e.g. a `co2` actuator, a `pressure` sensor) are just new `device_type` values, no schema change needed.
+Splitting the old single `device_type` (`sensor`/`actuator`) into `device_category` + `device_type` generalizes device identification: a node can now be queried or matched by exact capability ("give me this node's `humidity` sensor") instead of by its free-text `label`, which was never meant to be parsed. It also directly lines up with the `device_type` key already used in `action_policy.action` and `actions_log.action` (e.g. `{"device_type": "fan", "command": "on"}`) — the same vocabulary identifies a device here and drives what a policy targets there. New device types (e.g. a `co2` actuator, a `pressure` sensor) are just new `device_type` values, no schema change needed.
 
 Ingestion checks `status = 'active'` before writing anything to `conditions` — an unregistered or revoked `device_id` is rejected, not silently stored.
 
@@ -467,14 +529,27 @@ Real-time sensor log — the highest write-volume table on the hub. Records gree
 Indexes: `(metric, recorded_at)` for rule-evaluation lookups, and a partial index on `synced = 0` so the sync job's "find everything pending" query stays cheap as the table grows across a season.
 
 ### `node_rules_cache`
-Local copy of whichever `rules` are installed on this node (pulled from the cloud tier's `node_rules`), so the hub can evaluate rules and make decisions entirely offline.
+Local copy of whichever threshold `rules` are installed on this node (pulled from the cloud tier's `node_rules`), so the hub can evaluate its comfort band entirely offline. Thresholds only — what to *do* about an excursion comes from `action_policy_cache` below.
 
 | Field | Type | Notes |
 |---|---|---|
 | rule_id | integer, PK | |
-| condition_json | json | e.g. `{"metric":"soil_moisture","op":"<","value":30}` |
-| action_json | json | e.g. `{"actuator":"valve_1","command":"open"}` |
+| condition_json | json | e.g. `{"temperature":{"min":24,"max":30}}` |
 | version | integer | bumped on refresh, so the sync job can tell if the rule set changed without diffing every row |
+| updated_at | timestamp | |
+
+### `action_policy_cache`
+Local copy of the fleet-wide `action_policy` table. Identical on every hub regardless of crop, so it can be installed at shipping time and refreshed by the same pull mechanism as `node_rules_cache`.
+
+| Field | Type | Notes |
+|---|---|---|
+| policy_id | integer, PK | |
+| variable | string | `temperature`, `humidity`, ... |
+| direction | string | `above` \| `below` |
+| gap_min | float | absolute excursion lower bound |
+| gap_max | float, nullable | null = open-ended top bucket |
+| action_json | json | e.g. `{"device_type":"fan","command":"on","intensity":"low"}` |
+| model_version | string | |
 | updated_at | timestamp | |
 
 ### `actions_log`
@@ -502,7 +577,8 @@ Every action taken in response to a condition — automated **or manual** — wi
 | `user_authentication` → `nodes` | 1:N | One farmer can own several GreenNode hubs. |
 | `nodes` → `node_identity` | 1:1, shared key | Same physical hub, represented at two tiers. Cloud `nodes.node_id` matches edge `node_identity.node_uid` — this is what lets synced rows be traced back to a verified physical device rather than an arbitrary local id. |
 | `nodes` → `node_rules` → `rules` | M:N via junction | A node can run several active rules; a rule (e.g. "vent if temp > 32°C for tomatoes") can apply to every tomato-crop hub on the platform. A direct `nodes → rules` link can't express this correctly. |
-| `rules` ← `conditions` (cloud) | derived-from, not FK | Cloud `conditions` is the historical dataset the rule-mining model trains on; `rules` is the output. There's no live FK here, only a data-lineage/model-training relationship. |
+| `rules` ← `conditions` (cloud) | derived-from, not FK | Cloud `conditions` is the historical dataset the threshold fit runs over; `rules` is the output. No live FK, only data lineage. |
+| `action_policy` ← `conditions` + `actions_log_cloud` | derived-from, not FK | Trained on gap (reading vs. each hub's active threshold) and the manual action taken. Global: no crop or node key, which is what makes one policy valid for every hub. |
 | `node_identity` → `connected_devices` | 1:N | One hub pairs with many third-party sensors/actuators — each must be explicitly registered (paired) before its data is trusted. |
 | `connected_devices` → `conditions` (edge) | 1:N | Each reading is attributed to the specific paired device that reported it, not just the hub in general — this is also the enforcement boundary: an unpaired or revoked `device_id` gets rejected at ingestion. |
 | `conditions` (edge) → `conditions` (cloud) | batch sync, not FK | Local real-time readings periodically push into the cloud aggregate table, keyed by `(node_uid, local_id)`. This is a pipeline/job, not a relational constraint — hence the `synced` flag rather than a foreign key. |
@@ -513,18 +589,27 @@ Every action taken in response to a condition — automated **or manual** — wi
 | `nodes` → `rules` | 1:N, nullable | Most rules are fleet-wide (`node_id` null); a rule with `node_id` set is a personalized override for that one hub, installed via `node_rules` at higher `priority` than the fleet default it supersedes. |
 | `actions_log` (edge) → `actions_log_cloud` | batch sync, not FK | Same sync pattern as `conditions_edge` → `conditions`, keyed by `(node_uid, local_id)`. This is what makes `triggered_by` available cloud-side for training. |
 | `conditions` (cloud) → `actions_log_cloud` | 1:N, nullable | Mirrors the edge-side relationship: an automated action links back to the reading that triggered it; manual overrides leave this null. |
+| `action_policy` → `action_policy_cache` | periodic pull, fleet-wide | No per-node junction: every hub receives the same full table, since the policy is crop-agnostic. |
 
 ---
 
-## 5. How `rules` are derived from `conditions`
+## 5. How `rules` and `action_policy` are derived
 
-1. **Treat it as supervised learning.** Each `conditions` row is a labeled example: sensor state (temperature, humidity, soil_moisture, light, co2, time-of-day, crop_type) → the action that was taken.
-2. **Use an interpretable model, not a black box.** A decision tree (e.g. `sklearn.tree.DecisionTreeClassifier`) or a rule-induction algorithm (RIPPER/CN2) — each root-to-leaf path reads directly as an if/then rule, which maps cleanly onto the `rules.condition` / `rules.action` json fields. A neural net would give accuracy but nothing storable as a legible rule.
-3. **Extract each leaf as a `rules` row** — the conjunction of splits along that path becomes `condition`, the leaf's majority action becomes `action`, and the leaf's sample count/purity becomes the confidence/support fields.
-4. **Re-train periodically** (nightly/weekly batch job) as `conditions` grows. Bump `model_version` and mark superseded rules `status = deprecated` rather than deleting them, so historical `actions_log` rows still resolve against the rule version that actually fired.
-5. **Push down, don't poll live** — updated `node_rules` entries get pulled into each hub's `node_rules_cache` on a schedule (e.g. hourly), so decisions can still be made if the hub is offline when the greenhouse needs one.
+**Thresholds (`rules`)**
+1. **Statistics, not classification.** For each `(crop_type, growth_stage)`, fit a comfort band per variable from the historical `conditions` of hubs in that state (percentile band, anchored on agronomic priors while data is thin).
+2. **Store the band as `condition`** with sample count and fit quality as `support` / `confidence`.
+3. **Personalize later.** Once a hub has enough of its own history, a node-scoped run writes a higher-`priority` rule that overrides the fleet default on that hub only.
 
-This is deliberately lighter-weight than a TFLite/ONNX model — reserve those for genuinely complex prediction tasks (e.g. disease detection from imagery, yield forecasting), and keep the actuator decision loop itself interpretable and cheap to run on-device.
+**Actions (`action_policy`)**
+1. **Supervised learning on the gap.** Each manual action is a labeled example: `|reading − nearest threshold edge|`, direction → the action the farmer took.
+2. **Interpretable model.** A shallow `DecisionTreeClassifier` per `(variable, direction)`; each leaf becomes a gap bucket with an action. A neural net would give nothing storable as a legible policy.
+3. **Global by construction.** No crop or node filter, so a crop with no installations yet still inherits a trained response.
+
+**Both pipelines**
+- **Re-train periodically** (nightly/weekly batch). Bump `model_version` and mark superseded rows `deprecated` rather than deleting them, so historical `actions_log` rows still resolve against the version that actually fired.
+- **Push down, don't poll live.** Approved rows reach each hub's `node_rules_cache` / `action_policy_cache` on a schedule, so decisions still work if the hub is offline when the greenhouse needs one.
+
+This is deliberately lighter-weight than a TFLite/ONNX model — reserve those for genuinely complex prediction tasks (disease detection from imagery, yield forecasting) and keep the actuator decision loop interpretable and cheap to run on-device.
 
 ---
 
@@ -537,7 +622,7 @@ This is deliberately lighter-weight than a TFLite/ONNX model — reserve those f
 | ORM | SQLAlchemy (shared models across both tiers) | Keeps the cloud and edge schemas defined from the same source, reducing drift as more hubs get deployed with different schema versions. |
 | Migrations | Alembic | Versioned schema upgrades — important once hubs are in the field running different firmware/schema versions. |
 | Sync transport | Mosquitto MQTT bridge (local broker → cloud broker), or a REST batch-push sync daemon | Reuses the MQTT infrastructure already used for actuator commands rather than standing up a second data pipeline. |
-| Rule mining | scikit-learn (`DecisionTreeClassifier`) + APScheduler for the retraining job | Interpretable output that maps directly onto the `rules` json schema; cheap enough to run as a periodic batch job rather than needing dedicated ML infrastructure. |
+| Threshold + action-policy training | scikit-learn (`DecisionTreeClassifier` for the action policy; percentile fits for thresholds) + APScheduler for the retraining jobs | Interpretable output that maps directly onto the `rules` / `action_policy` json schemas; cheap enough to run as periodic batch jobs without dedicated ML infrastructure. |
 | Backend API | FastAPI | Already the project's chosen backend; serves both the admin panel and the sync/ingestion endpoints. |
 | Admin panel | Electron + React | Already decided; consumes the cloud tier directly. |
 | Mobile app | React Native | Already decided. |
