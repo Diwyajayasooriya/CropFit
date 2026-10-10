@@ -17,6 +17,8 @@ from app.provisioning.wifi_manager import (
     is_cloud_reachable,
     is_wifi_connected,
     get_local_ip,
+    saved_wifi_profiles,
+    reconnect_saved_wifi,
 )
 from app.provisioning.hotspot import start_setup_hotspot, stop_setup_hotspot
 from app.provisioning.portal import app as portal_app, set_portal_device_id
@@ -37,7 +39,7 @@ class EdgeState(str, Enum):
 
 
 class EdgeStateMachine:
-    def __init__(self, config_mgr: Optional[ConfigManager] = None):
+    def __init__(self, config_mgr: Optional[ConfigManager] = None, setup_wifi: bool = False):
         self.config_mgr = config_mgr or ConfigManager()
         self.config = self.config_mgr.load()
         self.state = EdgeState.BOOT
@@ -45,6 +47,8 @@ class EdgeStateMachine:
         self.portal_server_started = False
         self.network_check_start = 0.0
         self.consecutive_cloud_errors = 0
+        self.setup_wifi = setup_wifi
+        self.wifi_retry_index = 0
 
     def transition_to(self, new_state: EdgeState, reason: str = ""):
         log.info(
@@ -126,12 +130,16 @@ class EdgeStateMachine:
 
         log.info("Initialized CropFit Hub Device ID: %s", self.config["device_id"])
         self.network_check_start = time.time()
+        if self.setup_wifi:
+            self.setup_wifi = False
+            self.transition_to(EdgeState.PROVISIONING, "Explicit Wi-Fi setup requested")
+            return
         self.transition_to(EdgeState.CHECK_NETWORK, "Device identity loaded")
 
     def _handle_check_network(self):
         """
-        Gives the operating system a 30-45s grace period to reconnect to existing Wi-Fi
-        before opening the SoftAP provisioning hotspot.
+        Retry saved Wi-Fi indefinitely for configured hubs. Only a new hub with
+        no saved client profiles enters setup automatically after the grace period.
         """
         cloud_url = self.config.get("cloud_url", "")
 
@@ -150,8 +158,19 @@ class EdgeStateMachine:
             log.info("Waiting for saved Wi-Fi connection... (%ds/30s)", int(elapsed))
             time.sleep(3.0)
         else:
-            log.warning("No Wi-Fi connection after grace period. Starting SoftAP Provisioning Mode.")
-            self.transition_to(EdgeState.PROVISIONING, "Wi-Fi connection timeout")
+            profiles = saved_wifi_profiles()
+            configured = self.config.get("is_claimed") or self.config.get("hub_token")
+            if configured or profiles or profiles is None:
+                if profiles:
+                    profile = profiles[self.wifi_retry_index % len(profiles)]
+                    self.wifi_retry_index += 1
+                    if reconnect_saved_wifi(profile):
+                        # Verify connectivity on the next pass before resuming cloud traffic.
+                        return
+                log.info("Waiting for saved network recovery; retrying in 15 seconds.")
+                time.sleep(15.0)
+                return
+            self.transition_to(EdgeState.PROVISIONING, "First-time Wi-Fi setup required")
 
     def _handle_provisioning(self):
         """Creates temporary SoftAP hotspot and serves local setup portal."""
@@ -167,12 +186,13 @@ class EdgeStateMachine:
         log.info("Captive SoftAP active [%s]. Waiting for farmer Wi-Fi setup via http://192.168.4.1...", ssid)
 
         # Wait until farmer submits credentials and network connects
-        while not has_active_internet():
+        while not (is_wifi_connected() or has_active_internet()):
             time.sleep(2.0)
 
         log.info("Wi-Fi connected successfully via portal!")
         stop_setup_hotspot()
-        self.transition_to(EdgeState.BOOTSTRAP, "Farmer Wi-Fi provisioning completed")
+        self.network_check_start = time.time()
+        self.transition_to(EdgeState.CHECK_NETWORK, "Farmer Wi-Fi provisioning completed")
 
     def _handle_bootstrap(self):
         """Announces hub to cloud backend /api/v1/nodes/bootstrap/"""

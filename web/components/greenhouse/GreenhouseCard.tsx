@@ -4,9 +4,9 @@ import React from 'react';
 import Link from 'next/link';
 import type { Greenhouse, DashboardSummary } from '@/types';
 import type { GreenNode } from '@/lib/api-functions';
+import { timeAgo } from '@/lib/utils';
 import { Card, StatusBadge, type CropFitStatus } from '@/components/ui';
 import {
-  SproutIcon,
   WifiIcon,
   WifiOffIcon,
   ThermometerIcon,
@@ -19,6 +19,8 @@ interface GreenhouseCardProps {
   summary?: DashboardSummary | null;
   nodes?: GreenNode[];
   loading?: boolean;
+  nodesError?: string | null;
+  onRetry?: () => void;
 }
 
 export function GreenhouseCard({
@@ -26,11 +28,11 @@ export function GreenhouseCard({
   summary,
   nodes = [],
   loading = false,
+  nodesError = null,
+  onRetry,
 }: GreenhouseCardProps) {
-  // Extract primary hub
-  const primaryNode = nodes[0];
-  const hubId = primaryNode?.node_id || (greenhouse.node_count > 0 ? 'GN-HUB-C554' : 'Unlinked');
-  const hubOnline = primaryNode ? primaryNode.is_online : greenhouse.node_count > 0;
+  const linkedNodes = nodes.filter(node => node.greenHouse === greenhouse.id);
+  const statusUnknown = loading || Boolean(nodesError);
 
   // Extract temperature & soil moisture tiles if present
   const tempTile = summary?.tiles?.find(
@@ -40,8 +42,9 @@ export function GreenhouseCard({
     (t) => t.sensor_kind === 'soil_moisture' && t.value !== null
   );
 
-  const tempDisplay = tempTile ? `${tempTile.value}${tempTile.unit}` : '29.4°C';
-  const soilDisplay = soilTile ? `${soilTile.value}${soilTile.unit}` : '46%';
+  const tempDisplay = tempTile ? `${tempTile.value}${tempTile.unit}` : 'No data';
+  const soilDisplay = soilTile ? `${soilTile.value}${soilTile.unit}` : 'No data';
+  const hasReadings = summary?.tiles?.some(tile => tile.value !== null && tile.value !== undefined);
 
   // Health
   const healthStatus: CropFitStatus =
@@ -63,14 +66,14 @@ export function GreenhouseCard({
               {greenhouse.name}
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              Crop: <span className="font-semibold text-slate-700">{greenhouse.crop || 'Tomato'}</span>
+              Crop: <span className="font-semibold text-slate-700">{greenhouse.crop || 'Not specified'}</span>
               {greenhouse.location && <span> · {greenhouse.location}</span>}
             </p>
           </div>
 
-          <StatusBadge status={healthStatus} showDot>
+          {hasReadings && summary?.overall_status ? <StatusBadge status={healthStatus} showDot>
             Health: {healthLabel}
-          </StatusBadge>
+          </StatusBadge> : <span className="text-xs text-slate-500">Health: No data</span>}
         </div>
 
         {/* Sensor Quick Stats Grid */}
@@ -105,21 +108,28 @@ export function GreenhouseCard({
         </div>
 
         {/* Hub Connection Details */}
-        <div className="mt-4 flex items-center justify-between text-xs text-slate-500 px-1">
-          <span className="flex items-center gap-1.5 font-medium">
-            {hubOnline ? (
-              <WifiIcon size={14} className="text-emerald-600" />
-            ) : (
-              <WifiOffIcon size={14} className="text-slate-400" />
-            )}
-            <span>GreenNode:</span>
-            <span className="font-mono text-slate-700 font-semibold">{hubId}</span>
-          </span>
-
-          <span className="text-[11px] text-slate-400">
-            {greenhouse.node_count} hub{greenhouse.node_count === 1 ? '' : 's'} linked
-          </span>
-        </div>
+        <section aria-label="Linked GreenNode hubs" className="mt-4 space-y-3 text-xs text-slate-500 px-1">
+          <p className="font-medium">GreenNode hubs{!statusUnknown ? `: ${linkedNodes.length} linked` : ''}</p>
+          {nodesError ? <p role="status" className="text-amber-700">Hub status unavailable. {onRetry && <button onClick={onRetry} className="underline cursor-pointer">Retry</button>}</p>
+            : loading ? <p role="status">Loading hubs...</p>
+            : linkedNodes.length === 0 ? <p>No hub linked.</p> : null}
+          {linkedNodes.map(node => (
+            <div key={node.id} className="border-t border-slate-100 pt-2">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="font-semibold text-slate-700 break-words">{node.node_name || 'GreenNode'}</p>
+                  <p className="font-mono break-all">{node.node_id}</p>
+                </div>
+                <span className={`flex items-center gap-1 shrink-0 ${!statusUnknown && node.is_online ? 'text-emerald-700' : 'text-slate-500'}`}>
+                  {statusUnknown ? 'Status unknown' : node.is_online
+                    ? <><WifiIcon size={14} />Online</>
+                    : <><WifiOffIcon size={14} />Offline</>}
+                </span>
+              </div>
+              <p className="mt-1 text-[11px]">Last seen: {timeAgo(node.last_seen)}</p>
+            </div>
+          ))}
+        </section>
       </div>
 
       {/* Action Footer */}

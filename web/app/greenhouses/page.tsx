@@ -1,13 +1,12 @@
 'use client';
 
 import React, { useState } from 'react';
-import Link from 'next/link';
-import { getGreenhouses } from '@/lib/api-functions';
+import { getGreenhouses, getNodes } from '@/lib/api-functions';
 import { useResource } from '@/hooks/use-resource';
+import { usePollingResource } from '@/hooks/use-polling-resource';
 import { GreenhouseCard } from '@/components/greenhouse/GreenhouseCard';
 import { AddGreenhouseModal } from '@/components/greenhouse/AddGreenhouseModal';
 import {
-  SectionHeader,
   Button,
   LoadingSkeleton,
   EmptyState,
@@ -17,7 +16,9 @@ import { SproutIcon, PlusIcon, RefreshIcon } from '@/components/icons';
 
 export default function GreenhousesPage() {
   const resource = useResource(getGreenhouses);
+  const hubs = usePollingResource(getNodes, 15000);
   const [modalOpen, setModalOpen] = useState(false);
+  const refresh = () => { resource.reload(); hubs.reload(); };
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8 animate-page-in">
@@ -34,7 +35,7 @@ export default function GreenhousesPage() {
 
         <div className="flex items-center gap-3">
           <button
-            onClick={resource.reload}
+            onClick={refresh}
             disabled={resource.loading}
             className="p-2.5 rounded-xl border border-slate-200 bg-white text-slate-600 hover:text-emerald-700 hover:border-slate-300 shadow-xs cursor-pointer transition-all active:scale-95 disabled:opacity-50"
             title="Refresh greenhouse list"
@@ -87,7 +88,14 @@ export default function GreenhousesPage() {
       {resource.data && resource.data.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {resource.data.map((greenhouse) => (
-            <GreenhouseCard key={greenhouse.id} greenhouse={greenhouse} />
+            <GreenhouseCard
+              key={greenhouse.id}
+              greenhouse={greenhouse}
+              nodes={hubs.data ?? []}
+              loading={hubs.loading}
+              nodesError={hubs.error}
+              onRetry={hubs.reload}
+            />
           ))}
         </div>
       )}
@@ -96,7 +104,7 @@ export default function GreenhousesPage() {
       <AddGreenhouseModal
         isOpen={modalOpen}
         onClose={() => setModalOpen(false)}
-        onSaved={resource.reload}
+        onSaved={refresh}
       />
     </div>
   );
